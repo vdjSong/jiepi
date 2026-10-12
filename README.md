@@ -31,4 +31,12 @@
 
 本项目以 [GPL-3.0](LICENSE) 许可证开源。
 
-第三方组件及其许可证详见应用内「更多 → 开源声明」页。
+### 第三方开源组件
+
+| 组件 | 作者 | 许可证 |
+| --- | --- | --- |
+| AndroidX（10 个组件） | Google（Android Open Source Project） | Apache-2.0 |
+| Rubber Band 4.0.0 | Chris Cannam / Particular Programs Ltd | GPL-2.0-or-later |
+| pinyin4j 2.5.1 | Li Min | GPL-2.0-or-later |
+
+各组件完整声明（名称 / 版本 / 作者 / 来源地址 / 许可证原文链接）见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)；许可证原文（英文）与中文参考翻译也可在应用内「更多 → 开源声明」页查看。
