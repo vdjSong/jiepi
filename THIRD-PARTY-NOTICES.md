@@ -1,3 +1,14 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: c5b55bc247652f3623bf8f3d990e6575_4d5fe2c3c60f11f197b3525400248c00
+    ReservedCode1: Y42yFb3KaqDJJYUJJilRZ6oA/p7c1Ov0ejNMuO5kpZ9+jkJvr8KeCRMPJvvj0Zy8cXPKGsZ1eVLCWeqjkVNJgcU66x0i78Sihsi5eX/TdLFZ+8vI2nLrx8OGO9hoc9+MexycVleNMfANhFWnWpo1NuYeTKQbEyJ0cYeJ+ItcFBN+wYEdHMeupO4AOeE=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: c5b55bc247652f3623bf8f3d990e6575_4d5fe2c3c60f11f197b3525400248c00
+    ReservedCode2: Y42yFb3KaqDJJYUJJilRZ6oA/p7c1Ov0ejNMuO5kpZ9+jkJvr8KeCRMPJvvj0Zy8cXPKGsZ1eVLCWeqjkVNJgcU66x0i78Sihsi5eX/TdLFZ+8vI2nLrx8OGO9hoc9+MexycVleNMfANhFWnWpo1NuYeTKQbEyJ0cYeJ+ItcFBN+wYEdHMeupO4AOeE=
+---
+
 # 第三方开源组件声明（THIRD-PARTY NOTICES）
 
 洁癖播放器（jiepi）在开发过程中使用了以下第三方开源组件。按照各组件许可证的要求，在此逐一声明。每个组件的许可证原文（英文）与中文参考翻译，均可在 App 内「更多 → 开源声明」页查看；此处给出许可证官方文本链接供核对。
@@ -69,3 +80,4 @@
 
 - 以上许可证原文（英文，一字不改）与中文参考翻译（非官方，仅供参考，以原文为准）均内置在 App 内「更多 → 开源声明」页，可逐条展开查看。
 - 若本声明与各组件许可证原文存在任何出入，以各组件官方许可证原文为准。
+*（内容由AI生成，仅供参考）*

@@ -45,6 +45,16 @@
             android:textColor="#888888"
             android:textSize="13sp" />
 
+        <TextView
+            android:id="@+id/tv_more_author"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center_horizontal"
+            android:layout_marginTop="4dp"
+            android:text="by Song • Ma"
+            android:textColor="#666666"
+            android:textSize="11sp" />
+
         <LinearLayout
             android:id="@+id/more_menu_container"
             android:layout_width="match_parent"
