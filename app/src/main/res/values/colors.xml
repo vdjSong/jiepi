@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="purple_200">#FFBB86FC</color>
+    <color name="purple_500">#FF6200EE</color>
+    <color name="purple_700">#FF3700B3</color>
+    <color name="teal_200">#FF03DAC5</color>
+    <color name="teal_700">#FF018786</color>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+    <color name="jp_line">#222222</color>
+    <!-- 柔和白：纯白 #FFFFFF 太刺眼，详情页统一用它，偏暖不扎眼（v2：F0F0F0 与纯白差 6% 肉眼难辨，加深到 E0E0E0，88% 亮度，明显柔和） -->
+    <color name="jp_soft_white">#FFE0E0E0</color>
+    <!-- 主按钮浅蓝：全 APP 唯一亮色，配深色字，用于"新建/添加" -->
+    <color name="jp_primary_blue">#FF4FC3F7</color>
+    <!-- 浅蓝底上的深色文字/图标 -->
+    <color name="jp_on_blue">#FF1A1A1A</color>
+    <!-- 次要按钮深灰底：用于"删除"等低调操作（v2：2A2A2A 与旧 333333 太接近，提到 383838，明显亮于纯黑背景） -->
+    <color name="jp_btn_dark">#FF383838</color>
+<color name="jp_btn_blue">#FF1565C0</color>
+    <!-- 卡片/弹窗中层色：比纯黑背景亮一档，边界自然 -->
+    <color name="jp_card">#FF1E1E1E</color>
+    <!-- 图标系统内置填充黑，渲染时统一染成柔和白 -->
+    <color name="jp_icon_white">#FFF0F0F0</color>
+    <!-- 霓虹卡片方案（与 NeonCard.kt 常量一一对应）：深灰卡片 + 整圈四色渐变描边 -->
+    <color name="jp_card_dark">#FF2C2C2E</color>
+    <color name="jp_card_btn">#FF333333</color>
+    <color name="jp_neon_purple">#FFC084FC</color>
+    <color name="jp_neon_pink">#FFF472B6</color>
+    <color name="jp_neon_cyan">#FF38BDF8</color>
+    <color name="jp_sub_text">#FF888888</color>
+    <color name="jp_unselected_text">#FFCCCCCC</color>
+</resources>

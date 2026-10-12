@@ -1,0 +1,1 @@
+Moved Permanently. Redirecting to https://raw.githubusercontent.com/breakfastquay/rubberband/default/CONTRIBUTING.md

@@ -1,0 +1,260 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000"
+    android:orientation="vertical">
+
+    <!-- 顶栏：返回键 + 歌名 + 歌手 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingTop="12dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <ImageView
+                android:id="@+id/btn_back"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:padding="10dp"
+                android:src="@drawable/ic_play_back"
+                android:tint="@color/jp_soft_white"
+                android:contentDescription="返回" />
+
+            <TextView
+                android:id="@+id/song_title"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:paddingEnd="44dp"
+                android:text="歌名"
+                android:textColor="@color/jp_soft_white"
+                android:textSize="20sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <!-- 歌手副标题：有歌手显示歌手，读不到固定「未知歌手」占位，不隐藏 -->
+        <TextView
+            android:id="@+id/artist_title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:paddingStart="44dp"
+            android:paddingEnd="44dp"
+            android:paddingBottom="4dp"
+            android:text="未知歌手"
+            android:textColor="#999999"
+            android:textSize="13sp" />
+    </LinearLayout>
+
+    <!-- 歌词区：有歌词=两行固定对角显示；没有歌词=提示 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:gravity="center">
+
+        <!-- 歌词窗口：屏幕中间，高度收小到两行够用，不再有中间一大块空 -->
+        <FrameLayout
+            android:id="@+id/lyric_box"
+            android:layout_width="match_parent"
+            android:layout_height="144dp"
+            android:layout_gravity="center"
+            android:padding="16dp"
+            android:clipChildren="true"
+            android:visibility="gone">
+
+            <!-- 两行固定对角：上下紧凑排，中间只留 10dp 小空隙 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center"
+                android:orientation="vertical">
+
+                <!-- 第一行：窗口内偏左（稍微靠左，不贴边），当前句或等待句 -->
+                <TextView
+                    android:id="@+id/lyric_top"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="start"
+                    android:gravity="start|center_vertical"
+                    android:paddingStart="36dp"
+                    android:paddingEnd="24dp"
+                    android:maxLines="2"
+                    android:ellipsize="end"
+                    android:textColor="#888888"
+                    android:textSize="14sp" />
+
+                <!-- 第二行：窗口内偏右（稍微靠右，不贴边），当前句或等待句 -->
+                <TextView
+                    android:id="@+id/lyric_bottom"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="end"
+                    android:gravity="end|center_vertical"
+                    android:layout_marginTop="10dp"
+                    android:paddingStart="24dp"
+                    android:paddingEnd="36dp"
+                    android:maxLines="2"
+                    android:ellipsize="end"
+                    android:textColor="#888888"
+                    android:textSize="14sp" />
+            </LinearLayout>
+        </FrameLayout>
+
+        <!-- 没有歌词/出错时的提示（有歌词时自动隐藏） -->
+        <TextView
+            android:id="@+id/lyric_text"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:padding="24dp"
+            android:text="暂无歌词"
+            android:textColor="#CCCCCC"
+            android:textSize="16sp"
+            android:lineSpacingExtra="12dp"
+            android:visibility="visible" />
+    </LinearLayout>
+
+    <!-- 功能键排：变速 / 变调 / 均衡 / 定时关闭 / 播放模式 -->
+    <LinearLayout
+        android:id="@+id/panel_func"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingTop="12dp"
+        android:paddingBottom="4dp">
+
+        <ImageView
+            android:id="@+id/btn_speed"
+            android:layout_width="0dp"
+            android:layout_height="56dp"
+            android:layout_weight="1"
+            android:padding="12dp"
+            android:src="@drawable/ic_play_speed"
+            android:tint="@color/jp_soft_white"
+            android:contentDescription="变速" />
+
+        <ImageView
+            android:id="@+id/btn_pitch"
+            android:layout_width="0dp"
+            android:layout_height="56dp"
+            android:layout_weight="1"
+            android:padding="12dp"
+            android:src="@drawable/ic_play_pitch"
+            android:tint="@color/jp_soft_white"
+            android:contentDescription="变调" />
+
+        <ImageView
+            android:id="@+id/btn_equalizer"
+            android:layout_width="0dp"
+            android:layout_height="56dp"
+            android:layout_weight="1"
+            android:padding="12dp"
+            android:src="@drawable/ic_play_equalizer"
+            android:tint="@color/jp_soft_white"
+            android:contentDescription="均衡" />
+
+        <ImageView
+            android:id="@+id/btn_timer"
+            android:layout_width="0dp"
+            android:layout_height="56dp"
+            android:layout_weight="1"
+            android:padding="12dp"
+            android:src="@drawable/ic_play_timer"
+            android:tint="@color/jp_soft_white"
+            android:contentDescription="定时关闭" />
+
+        <ImageView
+            android:id="@+id/btn_loop"
+            android:layout_width="0dp"
+            android:layout_height="56dp"
+            android:layout_weight="1"
+            android:padding="12dp"
+            android:src="@drawable/ic_play_repeat"
+            android:tint="@color/jp_soft_white"
+            android:contentDescription="播放模式" />
+    </LinearLayout>
+
+    <!-- 进度条 + 时间 -->
+    <LinearLayout
+        android:id="@+id/panel_progress"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:paddingTop="8dp">
+
+        <TextView
+            android:id="@+id/time_current"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="00:00"
+            android:textColor="@color/jp_soft_white"
+            android:textSize="14sp" />
+
+        <com.jiepi.player.ui.NeonSlider
+            android:id="@+id/seek_bar"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="8dp"
+            android:layout_marginEnd="8dp" />
+
+        <TextView
+            android:id="@+id/time_total"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="00:00"
+            android:textColor="@color/jp_soft_white"
+            android:textSize="14sp" />
+    </LinearLayout>
+
+    <!-- 控制按钮排 -->
+    <LinearLayout
+        android:id="@+id/panel_controls"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:orientation="horizontal"
+        android:paddingTop="16dp"
+        android:paddingBottom="48dp">
+
+        <ImageView
+            android:id="@+id/btn_previous"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_marginEnd="48dp"
+            android:src="@drawable/ic_play_previous"
+            android:tint="@color/jp_soft_white"
+            android:contentDescription="上一首" />
+
+        <ImageView
+            android:id="@+id/btn_play_pause"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:src="@drawable/ic_play_play"
+            android:tint="@color/jp_soft_white"
+            android:contentDescription="播放暂停" />
+
+        <ImageView
+            android:id="@+id/btn_next"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_marginStart="48dp"
+            android:src="@drawable/ic_play_next"
+            android:tint="@color/jp_soft_white"
+            android:contentDescription="下一首" />
+    </LinearLayout>
+</LinearLayout>

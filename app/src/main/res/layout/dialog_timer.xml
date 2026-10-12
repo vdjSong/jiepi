@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:background="@drawable/bg_dialog_rounded"
+    android:orientation="vertical"
+    android:padding="20dp">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center_horizontal"
+        android:text="定时关闭"
+        android:textColor="@color/jp_soft_white"
+        android:textSize="16sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginTop="4dp"
+        android:text="选择定时时长，到点自动暂停"
+        android:textColor="@color/jp_sub_text"
+        android:textSize="12sp" />
+
+    <!-- 第一行：15分钟 / 30分钟 / 45分钟 -->
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/timer_15"
+            android:layout_width="84dp"
+            android:layout_height="44dp"
+            android:layout_marginEnd="10dp"
+            android:background="@drawable/bg_speed_option"
+            android:gravity="center"
+            android:text="15分钟"
+            android:textColor="@drawable/text_speed_option"
+            android:textSize="14sp" />
+
+        <TextView
+            android:id="@+id/timer_30"
+            android:layout_width="84dp"
+            android:layout_height="44dp"
+            android:layout_marginEnd="10dp"
+            android:background="@drawable/bg_speed_option"
+            android:gravity="center"
+            android:text="30分钟"
+            android:textColor="@drawable/text_speed_option"
+            android:textSize="14sp" />
+
+        <TextView
+            android:id="@+id/timer_45"
+            android:layout_width="84dp"
+            android:layout_height="44dp"
+            android:background="@drawable/bg_speed_option"
+            android:gravity="center"
+            android:text="45分钟"
+            android:textColor="@drawable/text_speed_option"
+            android:textSize="14sp" />
+    </LinearLayout>
+
+    <!-- 第二行：60分钟 / 播放完当前 / 关闭定时 -->
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/timer_60"
+            android:layout_width="84dp"
+            android:layout_height="44dp"
+            android:layout_marginEnd="10dp"
+            android:background="@drawable/bg_speed_option"
+            android:gravity="center"
+            android:text="60分钟"
+            android:textColor="@drawable/text_speed_option"
+            android:textSize="14sp" />
+
+        <TextView
+            android:id="@+id/timer_after_current"
+            android:layout_width="84dp"
+            android:layout_height="44dp"
+            android:layout_marginEnd="10dp"
+            android:background="@drawable/bg_speed_option"
+            android:gravity="center"
+            android:text="播放完当前"
+            android:textColor="@drawable/text_speed_option"
+            android:textSize="13sp" />
+
+        <TextView
+            android:id="@+id/timer_off"
+            android:layout_width="84dp"
+            android:layout_height="44dp"
+            android:background="@drawable/bg_speed_option"
+            android:gravity="center"
+            android:text="关闭定时"
+            android:textColor="@drawable/text_speed_option"
+            android:textSize="14sp" />
+    </LinearLayout>
+</LinearLayout>

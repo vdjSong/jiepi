@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- EQ 页滑动块滑块：白色圆点，比系统默认稍大，好抓 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="oval">
+    <solid android:color="#FFFFFF" />
+    <size
+        android:width="24dp"
+        android:height="24dp" />
+</shape>

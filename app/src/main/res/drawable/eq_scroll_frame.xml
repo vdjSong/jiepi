@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- EQ 页滑动块外圈：圆润圆角长条框，2dp 灰描边，透明填充 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#00000000" />
+    <stroke
+        android:width="2dp"
+        android:color="#888888" />
+    <corners android:radius="14dp" />
+</shape>
