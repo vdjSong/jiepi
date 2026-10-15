@@ -61,6 +61,10 @@ object PlayerManager {
     private val resumeDrainMs = 120L
     // Handler 在主线程执行
     private val mainHandler = Handler(Looper.getMainLooper())
+    // 硬件音量渐弱任务序列号：每次启动 fadeOutVolume 自增，旧任务发现序列号过期即作废
+    //（连续切歌时旧实例可能被 getOrCreateTarget 复用为目标，setFullVolume 已复位其音量，
+    // 过期的渐弱任务必须停止递减，不能把新歌音量又压下去）
+    private var volumeFadeSeq = 0
 
     // ========== 排空等待（事件驱动，不猜固定 ms） ==========
     // 思路：不知道 buffer 什么时候排空，就等它排空"放话"再继续，期间保持排空状态老实待着。
@@ -374,7 +378,12 @@ object PlayerManager {
                 fresh.play()
                 applyAudioFxState()
             } else if (exo.playbackState == Player.STATE_ENDED) {
-                // 自动切歌：上一首已自然播完，没有"播放中硬停"，直接切换即可
+                // 自动切歌：上一首已自然播完，没有"播放中硬停"，直接切换即可。
+                // 复用同实例直切（无 stop 流程）不保证进入 STATE_IDLE 回调，而 Media3
+                // 只在输出格式变化时才自动 flush AudioProcessor——两首格式相同时上一首的
+                // EQ 滤波状态、混响尾巴、限幅平滑增益会残留灌入下一首开头。
+                // 切前显式清空 DSP（此刻 Media3 已停流，无 queueInput 并发；幂等无害）。
+                activeDsp?.flush()
                 exo.setMediaItem(MediaItem.fromUri(path))
                 exo.prepare()
                 if (startPosMs > 0) exo.seekTo(startPosMs.toLong())
@@ -424,9 +433,19 @@ object PlayerManager {
             activeDsp = dspA
             fresh.setMediaItem(MediaItem.fromUri(path))
             fresh.prepare()
-            fresh.playWhenReady = autoPlay
             if (positionMs > 0) fresh.seekTo(positionMs.toLong())
+            // 音效参数前置（play 前），避免播放中重建缓冲阻塞管线（同冷启动修复）
             applyAudioFxState()
+            if (autoPlay) {
+                // 自动开播等同冷启动：静音垫底 + 150ms 淡入，盖住首帧解码慢的
+                // underrun 定格-追赶（playWhenReady 设置本身不触发硬件 start 咔哒，
+                // 数据到位才真正起播，静音垫底兜住预热窗口）
+                dspA.prepareFadeIn()
+                fresh.playWhenReady = true
+                dspA.fadeIn(150)
+            } else {
+                fresh.playWhenReady = false
+            }
         } catch (e: Exception) {
             playerA = null
             playerB = null
@@ -457,6 +476,9 @@ object PlayerManager {
                     .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
                     .setAudioProcessors(arrayOf(dsp))
                     .setAudioTrackBufferSizeProvider { minBufferSizeInBytes, _, _, _, _, _, _ ->
+                        // 机制级根治切歌/seek 爆音的核心：把 AudioTrack 缓冲压回系统最小值
+                        //（约 30~50ms），排空快、截断残余短。曾提高到 2 倍（60~100ms）尝试
+                        // 缓解冷启动 underrun，但引发拖条/切歌杂音回归，回退保持浅缓冲。
                         minBufferSizeInBytes
                     }
                     .build()
@@ -502,6 +524,14 @@ object PlayerManager {
         }
         // 旧歌立刻开始渐出：processor 归零后 AudioTrack 继续自然排空 buffer 里的满音量残留
         activeDsp?.fadeOut()
+        // 旧歌硬件音量整体渐弱（300ms 定时递减到 0）：processor 级 fadeOut 只渐弱后续
+        // 写入的数据，AudioTrack buffer 里 fade 前已写满的旧歌满音量残留会原样播完
+        //（缓冲压到 30~50ms，Media3 在部分 ROM/采样率下放大到 100~300ms → 切歌后
+        // 旧歌满音量"有长有短"地响一段再突兀消失）。setVolume 作用于 AudioSink 整体
+        // 混音，对 buffer 里已有数据立即生效 → 残留也在同步渐弱，与 processor fadeOut
+        // 互补，构成真平滑交叉淡入。暂停切歌入口已 setVolume(0)，本函数从当前音量
+        // 起步递减，全程静音无副作用。
+        fadeOutVolume(old)
         // 登记交叉状态，listener 在 target READY 后接管
         pendingCrossTarget = target
         pendingCrossDsp = targetDsp
@@ -612,7 +642,10 @@ object PlayerManager {
                     if (speed == 1f && pitchSemitones == 0) {
                         pendingCrossDsp?.fadeIn(500)
                     }
-                    activeDsp?.fadeOut(500) // 旧歌对称渐出（processor 归零后 AudioTrack 自然排空）
+                    // 旧歌渐出不再在此处补 processor fadeOut(500)：READY 时旧 DSP 已由
+                    // crossfadeTo 的 25ms fadeOut 归零，增益≈0，再 fadeOut 500 实际无效。
+                    // 旧歌的整体平滑渐出已由 crossfadeTo 启动的硬件音量递减
+                    //（fadeOutVolume，300ms，对 AudioTrack buffer 残留同样生效）接管。
                     activePlayer = mine
                     activeDsp = pendingCrossDsp
                     val oldToken = crossToken
@@ -742,6 +775,31 @@ object PlayerManager {
     // 保证 duck 状态不被任何恢复路径误覆盖回满音量
     private fun setFullVolume(p: ExoPlayer) {
         p.setVolume(if (ducked) duckVolume else 1f)
+    }
+
+    // 旧歌硬件音量整体渐弱：主线程每 50ms 把实例 setVolume 递减一档，约 300ms 归零。
+    // 作用于 AudioSink 整体混音，对 AudioTrack buffer 里已写满的旧歌残留同样立即生效——
+    // 这正是 processor 级 fadeOut 管不到的部分（它只渐弱后续写入）。从当前音量起步
+    // （暂停切歌入口已 setVolume(0)，递减全程保持静音无副作用；duck 期间从压低音量
+    // 起步）。任务用序列号 + 播放态双重作废：有更新的渐弱任务启动（连续切歌复用实例）
+    // 或实例已被 stop（playbackState 变 IDLE）即停止递减。
+    private fun fadeOutVolume(player: ExoPlayer, durationMs: Int = 300) {
+        val seq = ++volumeFadeSeq
+        val start = player.volume
+        val steps = durationMs / 50 + 1 // 300ms → 7 档，6 个 50ms 间隔
+        var step = 0
+        fun tick() {
+            if (seq != volumeFadeSeq) return // 已有更新的渐弱任务，本任务作废
+            if (player.playbackState == Player.STATE_IDLE) return // 实例已 stop，任务作废
+            step++
+            if (step >= steps) {
+                player.setVolume(0f)
+                return
+            }
+            player.setVolume(start * (1f - step.toFloat() / steps))
+            mainHandler.postDelayed({ tick() }, 50)
+        }
+        tick()
     }
 
     // 焦点变化回调（主线程）：按 Android 标准四态处理
@@ -1188,7 +1246,9 @@ object PlayerManager {
         }
         val ctx = appContext
         when (loopMode) {
-            1 -> { // 单曲循环：重播当前
+            1 -> { // 单曲循环：重播当前。seekTo 从 ENDED 直达 BUFFERING 不经 IDLE 回调，
+                // 与自动切歌同理，显式清 DSP 让重播开头不残留上一遍的滤波/混响状态
+                activeDsp?.flush()
                 activePlayer?.seekTo(0)
                 activePlayer?.play()
             }

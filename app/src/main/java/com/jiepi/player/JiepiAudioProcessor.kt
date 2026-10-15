@@ -30,6 +30,14 @@ class JiepiAudioProcessor : AudioProcessor {
     // 每声道每段状态 [ch][band][x1, x2, y1, y2]
     private val eqState = Array(2) { Array(10) { FloatArray(4) } }
 
+    // EQ 系数平滑渐变：rebuild 算出的目标系数先进 eqCoeffsTarget，eqCoeffs（processEq
+    // 实际读取）由播放线程每音频块向目标逼近——参数变化不清 IIR 历史，滤波器在渐变中
+    // 自然过渡，无"状态归零瞬态"（拖增益滑块呲呲啦啦/沙沙的根源之一）。
+    // 渐变 12 块 ≈ 150~250ms，听感平滑且拖动响应不明显滞后。
+    private val eqCoeffsTarget = Array(10) { FloatArray(5) }
+    private var coeffFadeRemaining = 0
+    private val COEFF_FADE_BLOCKS = 12
+
     // 混响：16 梳状 + 4 全通（Freeverb 结构）+ 预延迟 + 高频阻尼。
     // 延迟表用 Freeverb 式非等差错开（25.31~49.73ms，间隔 52~134 样本不规则、无公共因子），
     // 避免等距延迟的共振峰周期对齐——等距步进会使 16 个梳状在 630/3125/6875Hz 等频点
@@ -141,7 +149,10 @@ class JiepiAudioProcessor : AudioProcessor {
     // seek 完成回调注册的"淡入完成"监听：播放线程渐变爬到 1 时触发一次
     @Volatile var onFadeInDone: (() -> Unit)? = null
 
-    // 线程安全：UI 线程设置目标值，播放线程逐帧平滑过渡
+    // 线程安全：UI 线程设置目标值，播放线程在下一音频块一步到位（fadeRemaining=1）。
+    // 不做多块插值：RubberBand realtime 引擎内部自带参数平滑，多次大步中间值反而让引擎
+    // 平滑器反复重同步（available 短暂归零 → 静音帧兜底 → 恢复淡入），听感就是
+    // "每次设新值都归零后重新载入"。一步到位让引擎一次性收敛，渐变由引擎内部完成。
     fun setSpeedPitch(speed: Float, pitch: Float) {
         synchronized(this) {
             val s = speed.coerceIn(0.5f, 2f)
@@ -151,7 +162,7 @@ class JiepiAudioProcessor : AudioProcessor {
             fadeFromPitch = sonic?.getPitch() ?: targetPitch
             targetSpeed = s
             targetPitch = p
-            fadeRemaining = fadeTotal
+            fadeRemaining = 1 // 一步到位：下一音频块推进时 k=1，直接 set 到目标
         }
     }
 
@@ -185,18 +196,36 @@ class JiepiAudioProcessor : AudioProcessor {
     }
 
     // 音效参数（0~100 的百分比在 setter 里归一化成 0~1）
-    private var eqLevels = FloatArray(10) // -12 ~ +12 dB
-    private var vocalSuppress = 0f
-    private var effectDynamic = 0f
-    private var effectHifi = 0f
-    private var effectHigh = 0f
-    private var effectLow = 0f
-    private var effectSurround = 0f
-    private var effectReverb = 0f
+    @Volatile private var eqLevels = FloatArray(10) // -12 ~ +12 dB
+    @Volatile private var vocalSuppress = 0f
+    @Volatile private var effectDynamic = 0f
+    @Volatile private var effectHifi = 0f
+    @Volatile private var effectHigh = 0f
+    @Volatile private var effectLow = 0f
+    @Volatile private var effectSurround = 0f
+    @Volatile private var effectReverb = 0f
+
+    // 效果参数平滑：dynamic/surround/reverb 在 processFrames 逐样本读取，UI 线程滑块实时
+    // 写上述 volatile 目标值——播放线程用一阶指数逼近平滑值，防止"参数逐样本突变→波形
+    // 瞬间跳变"（拖动态/环绕/混响滑块呲呲啦啦沙沙的根源，EQ 类已走系数渐变不需此平滑）。
+    // 时间常数 ~15ms：拖动响应无明显延迟，突变被抹平，松手后 ~45ms 收敛。fxSmoothCoef
+    // 在 configure 里按采样率算好（每样本 3 次乘加，开销可忽略）。
+    private var fxSmoothCoef = 0f
+    private var smoothEffectDynamic = 0f
+    private var smoothEffectSurround = 0f
+    private var smoothEffectReverb = 0f
+    // 音效参数已更新但尚未重建标志：UI 线程 setEqLevels/setEffects 只写参数快照并置位，
+    // 播放线程 queueInput 开头检测到置位才执行 rebuild（与 processFrames 天然串行）。
+    @Volatile private var fxDirty = false
 
     fun setEqLevels(levels: FloatArray) {
         eqLevels = levels.copyOf()
-        rebuild()
+        // 只标记待重建，rebuild 挪到播放线程 queueInput 里执行：滑块回调跑在 UI 线程，
+        // rebuild 会清空 eqState/重写 eqCoeffs/重建混响线，播放线程 processFrames 同时
+        // 在逐样本读这些数组 → 并发撕裂（新系数套半清空状态、IIR 历史跳变）→
+        // 拖动增益滑块"呲呲啦啦/沙沙"。volatile 快照 + 播放线程重建后无竞态。
+        // （rebuild 在 fxDirty 路径已不再清 eqState，系数走 eqCoeffsTarget 块级渐变）
+        fxDirty = true
     }
 
     fun setEffects(
@@ -210,11 +239,19 @@ class JiepiAudioProcessor : AudioProcessor {
         this.effectLow = effectLow / 100f
         this.effectSurround = effectSurround / 100f
         this.effectReverb = effectReverb / 100f
-        rebuild()
+        // 同上：只置待重建标志，由播放线程 queueInput 执行 rebuild，避免 UI 线程
+        // 高频滑块回调与 processFrames 并发撕裂 DSP 状态
+        fxDirty = true
     }
 
     // 合成最终各段 dB → 重算 EQ 双二阶系数，并重建混响延时线
-    private fun rebuild() {
+    // clearState=true 仅用于 configure（采样率/声道变化，旧采样率下的 IIR 历史套新系数
+    // 会首帧跳变）；滑块调参（fxDirty 路径）一律 false——不清 eqState，系数走
+    // eqCoeffsTarget → eqCoeffs 块级渐变，滤波器在渐变中自然连续过渡，无"状态归零瞬态"。
+    private fun rebuild(clearState: Boolean = false) {
+        if (clearState) {
+            for (ch in 0 until 2) for (b in 0 until 10) eqState[ch][b].fill(0f)
+        }
         val finalDb = FloatArray(10)
         for (i in 0..9) {
             var db = eqLevels[i]
@@ -244,17 +281,31 @@ class JiepiAudioProcessor : AudioProcessor {
             val a0 = 1f + alpha / a
             val a1 = -2f * cosW
             val a2 = 1f - alpha / a
-            eqCoeffs[band][0] = b0 / a0
-            eqCoeffs[band][1] = b1 / a0
-            eqCoeffs[band][2] = b2 / a0
-            eqCoeffs[band][3] = a1 / a0
-            eqCoeffs[band][4] = a2 / a0
+            // 目标系数写入 eqCoeffsTarget，eqCoeffs 由播放线程每音频块向目标逼近
+            // （processFrames 开头的系数渐变推进），IIR 历史保持不变自然过渡。
+            eqCoeffsTarget[band][0] = b0 / a0
+            eqCoeffsTarget[band][1] = b1 / a0
+            eqCoeffsTarget[band][2] = b2 / a0
+            eqCoeffsTarget[band][3] = a1 / a0
+            eqCoeffsTarget[band][4] = a2 / a0
         }
+        coeffFadeRemaining = COEFF_FADE_BLOCKS
         initReverb()
     }
 
     private fun initReverb() {
         val ch = channelCount.coerceIn(1, 2)
+        // 只在采样率/声道变化（缓冲尺寸不符）时才重建延时线；
+        // 调音效滑块时尺寸没变则跳过，保留混响尾巴不被掐断。
+        // 注：延时表 combDelays/allpassDelays 是常量，首级长度即可代表整表尺寸。
+        val needRebuild = combBuf.size != ch ||
+            allpassBuf.size != ch ||
+            preDelayLen != (sampleRate * 0.045f).toInt().coerceAtLeast(1000) ||
+            (combBuf.firstOrNull()?.firstOrNull()?.size ?: 0) !=
+            (sampleRate * combDelays[0]).toInt().coerceAtLeast(100) ||
+            (allpassBuf.firstOrNull()?.firstOrNull()?.size ?: 0) !=
+            (sampleRate * allpassDelays[0]).toInt().coerceAtLeast(20)
+        if (!needRebuild) return
         // 注意：内层 lambda 参数 n 是梳状/全通索引（不是声道索引）。
         // 每级缓冲长度必须按各自延时表计算（16 级非等差错开），声道间复用同一延时表；
         // 若误用声道索引会导致各级同长、首反射同刻叠加成一道强回声。
@@ -289,12 +340,25 @@ class JiepiAudioProcessor : AudioProcessor {
         }
         fadeTotal = FADE_BLOCK_COUNT // 渐变块数（不再按样本数：逐样本调参见 advanceFade 注释）
         sonicScratch = ShortArray(0)
-        rebuild()
+        // 效果参数平滑系数：时间常数 ~15ms（一阶指数逼近的目标值收敛速度）。
+        // 采样率越高每样本逼近步长越小，按采样率归一化保证时间常数恒定。
+        fxSmoothCoef = 1f - exp(-1f / (sampleRate * 0.015f))
+        rebuild(clearState = true) // 采样率/声道变化：清 EQ 历史，旧状态套新系数会首帧跳变
         return inputAudioFormat
     }
 
     override fun queueInput(inputBuffer: ByteBuffer) {
         if (!active) return
+        // 播放线程内执行待重建的音效参数：UI 线程 setEqLevels/setEffects 只写 volatile
+        // 参数快照并置 fxDirty，这里检测到才 rebuild——与 processFrames 同线程串行，
+        // 消除"滑块拖动时 UI 线程重写 eqCoeffs 与播放线程逐样本读并发撕裂"；
+        // fxDirty 路径不清 eqState，目标系数由 eqCoeffs 块级渐变逼近，无状态归零瞬态。
+        // 注意：rebuild 必须读最新 sampleRate/channelCount，Media3 保证 queueInput
+        // 之前必已 configure，安全。
+        if (fxDirty) {
+            fxDirty = false
+            rebuild()
+        }
         val bytes = inputBuffer.remaining()
         if (bytes < 2) return
         val ch = channelCount.coerceIn(1, 2)
@@ -366,7 +430,10 @@ class JiepiAudioProcessor : AudioProcessor {
                     outputBuffer = ByteBuffer.allocateDirect(silentBytes).order(ByteOrder.nativeOrder())
                 }
                 silentSent = true
-                if (fadeTarget == 1f) fadeGain = 0f
+                // 变速渐变期（引擎参数收敛期）avail 归零是引擎内部平滑的正常现象：
+                // 压 0 会让恢复时触发淡入重载 → 听感"归零后重新载入"；保持增益直接接续。
+                // 非变速（普通播放被意外打断）仍压 0，恢复淡入防瞬态，行为不变。
+                if (fadeTarget == 1f && !isSonicActive()) fadeGain = 0f
                 var n = silentBytes / 2
                 while (n-- > 0) outputBuffer.putShort(0)
                 outputBuffer.flip()
@@ -404,7 +471,21 @@ class JiepiAudioProcessor : AudioProcessor {
             limiterHigh = Array(2) { FloatArray(frames) }
         }
         advanceFade() // 变速渐变推进：每音频块调一次（不逐样本调参，见 advanceFade 注释）
+        // EQ 系数渐变推进：rebuild 算出目标系数后，eqCoeffs 每音频块向目标逼近一次。
+        // 参数变化不清 IIR 历史，滤波器在渐变中自然连续过渡，无状态归零瞬态（见 rebuild 注释）。
+        if (coeffFadeRemaining > 0) {
+            val step = 1f / coeffFadeRemaining
+            for (band in 0..9) for (j in 0..4) {
+                eqCoeffs[band][j] += (eqCoeffsTarget[band][j] - eqCoeffs[band][j]) * step
+            }
+            coeffFadeRemaining--
+        }
         for (f in 0 until frames) {
+            // 效果参数平滑逼近（一阶低通）：目标=volatile 字段（UI 线程滑块实时写），播放
+            // 线程逐样本逼近——动态/环绕/混响拖动时参数不再逐样本突变，波形连续无毛刺。
+            smoothEffectDynamic += (effectDynamic - smoothEffectDynamic) * fxSmoothCoef
+            smoothEffectSurround += (effectSurround - smoothEffectSurround) * fxSmoothCoef
+            smoothEffectReverb += (effectReverb - smoothEffectReverb) * fxSmoothCoef
             var l = inShort[f * ch].toFloat() / 32768f
             var r = if (ch == 2) inShort[f * ch + 1].toFloat() / 32768f else l
 
@@ -413,28 +494,28 @@ class JiepiAudioProcessor : AudioProcessor {
             r = processEq(r, if (ch == 2) 1 else 0)
 
             // 2) 混响：湿声按干湿比混入（100% 滑块湿声 30%，原声始终是主体，混响营造氛围）
-            if (effectReverb > 0f) {
+            if (smoothEffectReverb > 0f) {
                 val wl = processReverb(l, 0)
                 val wr = if (ch == 2) processReverb(r, 1) else wl
-                val mix = effectReverb * 0.35f // 干湿比 0.35：混响存在感加强，湿声更明显
+                val mix = smoothEffectReverb * 0.35f // 干湿比 0.35：混响存在感加强，湿声更明显
                 l += (wl - l) * mix
                 r += (wr - r) * mix
             }
 
             // 3) 环绕：M/S 拓宽（100% 时侧信号 +2.0dB）
-            if (ch == 2 && effectSurround > 0f) {
+            if (ch == 2 && smoothEffectSurround > 0f) {
                 val m = (l + r) * 0.5f
                 val s = (l - r) * 0.5f
-                val k = 1f + effectSurround * 0.9953f // 10^(6.0/20)≈1.9953，侧信号最多 +6.0dB
+                val k = 1f + smoothEffectSurround * 0.9953f // 10^(6.0/20)≈1.9953，侧信号最多 +6.0dB
                 l = m + s * k
                 r = m - s * k
             }
 
             // 4) 动态推进：tanh 软限幅 + 干湿混合稀释。
             // 干声兜底 + 湿声缓升：低段几乎无感，100% 有效小信号增益约 +3.0dB。
-            if (effectDynamic > 0f) {
-                val g = 1f + effectDynamic * 0.9f // 压缩强度 1~1.9（小信号增益 +3.0dB）
-                val wet = effectDynamic * 0.35f // 湿声比例 0~0.35
+            if (smoothEffectDynamic > 0f) {
+                val g = 1f + smoothEffectDynamic * 0.9f // 压缩强度 1~1.9（小信号增益 +3.0dB）
+                val wet = smoothEffectDynamic * 0.35f // 湿声比例 0~0.35
                 val dry = 1f - wet * 0.8f // 干声兜底
                 val norm = 1f / tanh(g)
                 l = l * dry + tanh(l * g) * norm * wet
@@ -599,6 +680,11 @@ class JiepiAudioProcessor : AudioProcessor {
         // 保留 0 后由 fadeIn() 让新歌 45ms 淡入，正好盖住 AudioTrack start 的咔哒。
         // 冷启动（初始 1）与自动切歌（无人调 fadeOut，仍为 1）不受影响。
         for (ch in 0 until 2) for (b in 0 until 10) eqState[ch][b].fill(0f)
+        // 效果参数平滑值归零：切歌/seek 音频流重来，平滑值从 0 重新向目标收敛，
+        // 避免沿用旧平滑值在新歌开头造成短暂效果残留（与 fadeIn 同步渐入，自然无感）
+        smoothEffectDynamic = 0f
+        smoothEffectSurround = 0f
+        smoothEffectReverb = 0f
         if (combBuf.isNotEmpty()) {
             for (ch in combBuf.indices) {
                 for (n in 0 until 16) { combBuf[ch][n].fill(0f); combIdx[ch][n] = 0 }

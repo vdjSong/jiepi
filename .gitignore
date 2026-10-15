@@ -11,5 +11,7 @@ local.properties
 /temp
 /build_log.txt
 /build_out.txt
+/build_out.log
+/compile_check.log
 /hs_err_pid*.log
 .kotlin

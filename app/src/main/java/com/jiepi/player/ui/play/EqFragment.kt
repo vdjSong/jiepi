@@ -20,6 +20,29 @@ class EqFragment : Fragment() {
     private var _binding: FragmentEqBinding? = null
     private val binding get() = _binding!!
 
+    // 滑块拖动防抖：onProgressChanged 高频触发（一次拖动几十上百次），每次直接
+    // applyAudioFxState 会高频重建 DSP + 高频写盘。合并为 50ms 内一次，松手立即定稿。
+    private var fxApplyPending = false
+    private val fxApplyRunnable = Runnable {
+        fxApplyPending = false
+        PlayerManager.applyAudioFxState()
+    }
+
+    private fun scheduleApplyFx() {
+        if (!fxApplyPending) {
+            fxApplyPending = true
+            binding.root.postDelayed(fxApplyRunnable, 50)
+        }
+    }
+
+    private fun flushApplyFx() {
+        if (fxApplyPending) {
+            fxApplyPending = false
+            binding.root.removeCallbacks(fxApplyRunnable)
+            PlayerManager.applyAudioFxState()
+        }
+    }
+
     override fun onCreateView(
         inflater: LayoutInflater,
         container: ViewGroup?,
@@ -146,13 +169,15 @@ class EqFragment : Fragment() {
                         3 -> PlayerManager.effectLow = progress
                         4 -> PlayerManager.effectSurround = progress
                     }
-                    PlayerManager.applyAudioFxState()
+                    scheduleApplyFx()
                     valTv.text = "$progress%"
                 }
 
                 override fun onStartTrackingTouch(slider: NeonSlider) {}
 
-                override fun onStopTrackingTouch(slider: NeonSlider) {}
+                override fun onStopTrackingTouch(slider: NeonSlider) {
+                    flushApplyFx()
+                }
             })
         }
     }
@@ -175,6 +200,8 @@ class EqFragment : Fragment() {
 
     override fun onDestroyView() {
         super.onDestroyView()
+        // 拖动中直接退出页面：防抖窗口内的最后参数立即定稿，防止 DSP 停在旧参数
+        flushApplyFx()
         // 离开 EQ 页：状态栏不恢复（全 app 统一黑底白字，MainActivity 全局兜底）。
         // 底部按钮不在这里恢复——EQ 页总从播放详情页进来，详情页 view 还活着时应保持隐藏，
         // 切到歌单/我的页时由它们自己 onResume 拉回
