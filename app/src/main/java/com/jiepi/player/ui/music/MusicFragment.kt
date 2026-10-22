@@ -66,7 +66,8 @@ class MusicFragment : Fragment() {
         private const val SONGS_CACHE_FILE = "jiepi_songs_cache.json"
     }
 
-    // 一首歌的信息：name 是文件原名（排序/歌词/回收站仍用它），id3 字段只用于列表显示
+    // 一首歌的信息：name 是文件原名（稳定键：歌词匹配/回收站/磁盘缓存定位仍用它），id3 字段用于列表显示
+    // 排序与 A-Z 索引改用 displayName（ID3 优先），避免显示与顺序错位
     private data class Song(
         val name: String,
         val path: String,
@@ -75,13 +76,14 @@ class MusicFragment : Fragment() {
         val id3Title: String? = null,
         val id3Artist: String? = null
     ) {
-        // 列表显示名：ID3 歌名优先；缺失回退「去扩展名 + 去『 - 歌手』尾巴」的文件名
+        // 列表显示名：ID3 歌名优先；缺失回退「去扩展名 + 去掉分隔符」的文件名
+        // 只去符号不丢字：「周杰伦 - 晴天」→「周杰伦 晴天」；不猜哪段是歌手，避免误删歌名
         val displayName: String
             get() {
                 val t = id3Title
                 if (!t.isNullOrBlank()) return t
                 var base = name.substringBeforeLast('.')
-                return base.replace(Regex("\\s*[-–—]\\s*[^-–—]+$"), "").trim()
+                return base.replace(Regex("[-_—–]+"), " ").replace(Regex("\\s+"), " ").trim()
             }
     }
 
@@ -117,6 +119,10 @@ class MusicFragment : Fragment() {
 
     // 当前选中的分类：0=歌曲 1=歌单 2=文件夹
     private var currentCategory = 0
+
+    // 首次扫描是否全量重排：磁盘缓存装载的是旧版按 name 排的序，切 displayName 排序后需迁移一次
+    // （进程内缓存 / 已迁移过的场景为 false，保持「只排新歌」的增量性能）
+    private var resortFullOnce = true
 
     // 底部三按钮当前状态：true=已经藏了，false=还露着（只在状态真变时播动画）
     private var bottomButtonsHidden = false
@@ -293,7 +299,8 @@ class MusicFragment : Fragment() {
                 totalItemCount: Int
             ) {
                 val shouldHide =
-                    totalItemCount > 0 && firstVisibleItem + visibleItemCount >= totalItemCount
+                    totalItemCount > visibleItemCount &&
+                        firstVisibleItem + visibleItemCount >= totalItemCount
                 // 只在状态真的变了才播动画，免得滚一格就抖一下
                 if (shouldHide != bottomButtonsHidden) {
                     bottomButtonsHidden = shouldHide
@@ -307,10 +314,12 @@ class MusicFragment : Fragment() {
         // 歌曲数据：内存缓存 → 磁盘缓存 → 空列表，然后统一后台扫一遍对齐
         if (cachedSongs != null) {
             songs = cachedSongs!!
+            resortFullOnce = false  // 进程内缓存已按 displayName 排好，不再全量重排
         } else {
             val disk = loadSongsCache()
             songs = disk ?: emptyList()
             cachedSongs = songs
+            resortFullOnce = true   // 磁盘缓存可能是旧版按 name 排的，首次扫描全量重排迁移
         }
         pushToPlayer()
         // 冷启动播放记忆恢复：缓存装载完、队列已推全量后再续播（页面重建时 currentIndex 已就位会自动跳过）
@@ -376,7 +385,7 @@ class MusicFragment : Fragment() {
     // 跳/滑到字母：跳到第一首以它开头的歌（中英文同一套首字母规则）
     private fun scrollToLetter(letter: String) {
         val base = songs
-        val idx = base.indexOfFirst { firstLetter(it.name) == letter }
+        val idx = base.indexOfFirst { firstLetter(it.displayName) == letter }
         if (idx < 0) return
         val pos = currentRows.indexOfFirst { !it.isHeader && it.songIndex == idx }
         if (pos >= 0) binding.songList.setSelection(pos)
@@ -417,7 +426,7 @@ class MusicFragment : Fragment() {
         if (pos >= currentRows.size) return
         val row = currentRows[pos]
         if (row.isHeader || row.songIndex !in songs.indices) return
-        val letter = firstLetter(songs[row.songIndex].name)
+        val letter = firstLetter(songs[row.songIndex].displayName)
         for (i in 0 until binding.indexBar.childCount) {
             val tv = binding.indexBar.getChildAt(i) as? TextView ?: continue
             val active = tv.text.toString() == letter
@@ -429,6 +438,7 @@ class MusicFragment : Fragment() {
 
     // 后台扫 SAF 文件夹（不卡界面）：批量 query 每层拿整层子项，扫完和旧列表增量对账
     // 对账规则：还存在的原条目不动（含排序位置）；消失的删掉；新增的单独排序后归并
+    // 排序键统一 displayName（ID3 歌名优先）：首次扫描全量重排一次做迁移，之后只排新歌
     private fun scanSongsAsync() {
         val ctx = requireContext().applicationContext
         val uris = folderUris.toList()
@@ -474,9 +484,16 @@ class MusicFragment : Fragment() {
             }
             // 剩下的 latest 全是新歌
             added.addAll(latest.values)
-            // 只对新歌排序，再和有序旧列表归并（整体仍有序）；新歌/变更歌统一批量读 ID3
-            added.sortWith(Comparator { a, b -> compareName(a.name, b.name) })
-            val enrichedAdded = added.map { enrichWithId3(it, ctx) }
+            // 首次扫描全量重排 kept：旧磁盘缓存按 name 排的序，切 displayName 后归并前提被破坏，需迁移一次
+            if (resortFullOnce) {
+                kept.sortWith(Comparator { a, b -> compareName(a.displayName, b.displayName) })
+                resortFullOnce = false
+            }
+            // 新歌/变更歌先批量读 ID3：排序键是 displayName（ID3 优先），必须先拿到 ID3 再排序
+            // map 返回只读 List 没有 sortWith，用 sortedWith 直接产出排好序的新列表
+            val enrichedAdded = added.map { enrichWithId3(it, ctx) }.sortedWith(
+                Comparator { a, b -> compareName(a.displayName, b.displayName) }
+            )
             val found = mergeSorted(kept, enrichedAdded)
 
             // 最新集合先写磁盘缓存：纯 IO 挪后台线程，不占主线程（下次启动秒出）
@@ -522,7 +539,7 @@ class MusicFragment : Fragment() {
         var i = 0
         var j = 0
         while (i < a.size && j < b.size) {
-            if (compareName(a[i].name, b[j].name) <= 0) out.add(a[i++]) else out.add(b[j++])
+            if (compareName(a[i].displayName, b[j].displayName) <= 0) out.add(a[i++]) else out.add(b[j++])
         }
         while (i < a.size) out.add(a[i++])
         while (j < b.size) out.add(b[j++])
@@ -629,6 +646,7 @@ class MusicFragment : Fragment() {
         PlayerManager.id3Titles = songs.map { it.displayName }.toMutableList()
         PlayerManager.id3Artists = songs.map { it.id3Artist ?: "" }.toMutableList()
         syncResumeSource()
+        PlayerManager.notifyQueueChanged()
     }
 
     // ========== 冷启动开播编排：播放记忆恢复 + 启动自动播放（数据存取在 PlayerManager，编排在这里） ==========

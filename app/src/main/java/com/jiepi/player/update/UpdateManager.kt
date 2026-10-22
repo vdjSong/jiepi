@@ -22,6 +22,24 @@ object UpdateManager {
     private const val RELEASE_API = "https://api.github.com/repos/vdjSong/jiepi/releases/latest"
     private const val APK_DIR = "update" // 缓存子目录，对应 res/xml/file_paths.xml 的 cache-path
 
+    /** 检查更新 API 候选：官方直连 + 国内加速代理，依次尝试，成功即停 */
+    private val apiCandidates = listOf(
+        RELEASE_API,
+        "https://github.akams.cn/$RELEASE_API",
+        "https://gh-proxy.com/$RELEASE_API",
+        "https://ghfast.top/$RELEASE_API"
+    )
+
+    /** APK 下载候选：国内加速镜像（前缀代理）+ 官方直连兜底，依次尝试，成功即停 */
+    private fun downloadCandidates(rawUrl: String): List<String> = listOf(
+        "https://gh-proxy.com/$rawUrl",
+        "https://ghfast.top/$rawUrl",
+        "https://ghproxy.net/$rawUrl",
+        "https://github.akams.cn/$rawUrl",
+        "https://ghproxy.homeboyc.cn/$rawUrl",
+        rawUrl // 官方直连兜底
+    )
+
     /**
      * 在后台线程查最新版本；回调在主线程。
      * onResult(latestTag, apkUrl, error)：latestTag 不带 v 前缀；error 非空表示检查失败。
@@ -35,27 +53,42 @@ object UpdateManager {
             var apkUrl: String? = null
             var err: String? = null
             try {
-                val conn = URL(RELEASE_API).openConnection() as HttpURLConnection
-                conn.connectTimeout = 10000
-                conn.readTimeout = 10000
-                conn.setRequestProperty("Accept", "application/vnd.github+json")
-                if (conn.responseCode == 200) {
-                    val text = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-                    val json = JSONObject(text)
-                    tag = json.optString("tag_name", "").removePrefix("v")
-                    val assets = json.optJSONArray("assets")
-                    for (i in 0 until (assets?.length() ?: 0)) {
-                        val a = assets!!.getJSONObject(i)
-                        if (a.optString("name", "").endsWith(".apk")) {
-                            apkUrl = a.optString("browser_download_url")
-                            break
+                for (api in apiCandidates) {
+                    var conn: HttpURLConnection? = null
+                    try {
+                        conn = URL(api).openConnection() as HttpURLConnection
+                        conn.connectTimeout = 10000
+                        conn.readTimeout = 10000
+                        conn.setRequestProperty("Accept", "application/vnd.github+json")
+                        if (conn.responseCode == 200) {
+                            val text = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+                            val json = JSONObject(text)
+                            val t = json.optString("tag_name", "").removePrefix("v")
+                            val assets = json.optJSONArray("assets")
+                            var u: String? = null
+                            for (i in 0 until (assets?.length() ?: 0)) {
+                                val a = assets!!.getJSONObject(i)
+                                if (a.optString("name", "").endsWith(".apk")) {
+                                    u = a.optString("browser_download_url")
+                                    break
+                                }
+                            }
+                            if (t.isNotEmpty() && !u.isNullOrEmpty()) {
+                                tag = t
+                                apkUrl = u
+                                err = null
+                                break
+                            }
+                            err = "服务器返回格式异常"
+                        } else {
+                            err = "服务器响应异常（HTTP ${conn.responseCode}）"
                         }
+                    } catch (e: Exception) {
+                        err = "网络异常，检查失败：${e.message ?: "未知错误"}"
+                    } finally {
+                        conn?.disconnect()
                     }
-                    if (tag.isNullOrEmpty() || apkUrl.isNullOrEmpty()) err = "服务器返回格式异常"
-                } else {
-                    err = "服务器响应异常（HTTP ${conn.responseCode}）"
                 }
-                conn.disconnect()
             } catch (e: Exception) {
                 err = "网络异常，检查失败：${e.message ?: "未知错误"}"
             }
@@ -96,19 +129,35 @@ object UpdateManager {
                 val dir = File(context.cacheDir, APK_DIR)
                 dir.mkdirs()
                 file = File(dir, "jiepi-update.apk")
-                val conn = URL(url).openConnection() as HttpURLConnection
-                conn.connectTimeout = 15000
-                conn.readTimeout = 30000
-                if (conn.responseCode == 200) {
-                    conn.inputStream.use { input ->
-                        FileOutputStream(file).use { out -> input.copyTo(out) }
+                // 依次尝试国内加速镜像，最后官方直连兜底；任一源成功即停
+                for (candidate in downloadCandidates(url)) {
+                    var conn: HttpURLConnection? = null
+                    try {
+                        conn = URL(candidate).openConnection() as HttpURLConnection
+                        conn.connectTimeout = 10000
+                        conn.readTimeout = 30000
+                        conn.setRequestProperty("Accept", "application/octet-stream")
+                        if (conn.responseCode == 200) {
+                            conn.inputStream.use { input ->
+                                FileOutputStream(file).use { out -> input.copyTo(out) }
+                            }
+                            err = null
+                            break
+                        } else {
+                            err = "下载失败（HTTP ${conn.responseCode}）"
+                        }
+                    } catch (e: Exception) {
+                        err = "下载失败：${e.message ?: "未知错误"}"
+                    } finally {
+                        conn?.disconnect()
                     }
-                } else {
-                    err = "下载失败（HTTP ${conn.responseCode}）"
+                    // 当前源失败：清掉半截文件再试下一个源
+                    if (file.exists()) file.delete()
                 }
-                conn.disconnect()
+                if (err != null) file = null
             } catch (e: Exception) {
                 err = "下载失败：${e.message ?: "未知错误"}"
+                file = null
             }
             val f = file
             val e = err

@@ -12,6 +12,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.view.KeyEvent
+import android.widget.RemoteViews
 import androidx.annotation.OptIn
 import androidx.core.app.NotificationCompat
 import androidx.media3.common.C
@@ -42,6 +43,9 @@ class PlaybackService : Service() {
     companion object {
         private const val CHANNEL_ID = "jiepi_playback"
         private const val NOTIFICATION_ID = 1
+        private const val ACTION_PLAY_PAUSE = "com.jiepi.player.action.PLAY_PAUSE"
+        private const val ACTION_NEXT = "com.jiepi.player.action.NEXT"
+        private const val ACTION_PREVIOUS = "com.jiepi.player.action.PREVIOUS"
     }
 
     private var mediaSession: MediaSession? = null
@@ -61,6 +65,7 @@ class PlaybackService : Service() {
     private val ticker = object : Runnable {
         override fun run() {
             playerProxy?.invalidateNow()
+            if (startedForeground) refreshNotification()
             mainHandler.postDelayed(this, 1000)
         }
     }
@@ -86,6 +91,20 @@ class PlaybackService : Service() {
     // 媒体按键直接交给会话（MediaSession 内置 KEYCODE 映射，无需自己解析）；
     // 普通启动立即挂前台通知，满足 startForegroundService 的 5 秒时限。
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_PLAY_PAUSE -> {
+                PlayerManager.pauseOrResume()
+                return START_STICKY
+            }
+            ACTION_NEXT -> {
+                PlayerManager.next(this)
+                return START_STICKY
+            }
+            ACTION_PREVIOUS -> {
+                PlayerManager.previous(this)
+                return START_STICKY
+            }
+        }
         if (intent?.action == Intent.ACTION_MEDIA_BUTTON) {
             // 蓝牙耳机/车载媒体键：解析 KeyEvent 后直接驱动 PlayerManager（会话状态经
             // playbackListener -> invalidateNow 自动跟随，无需绕 controller）
@@ -141,6 +160,7 @@ class PlaybackService : Service() {
     private fun buildNotification(): Notification {
         val title = PlayerManager.currentDisplayName().ifBlank { "洁癖播放器" }
         val artist = PlayerManager.currentArtist().ifBlank { "未在播放" }
+        val playing = PlayerManager.activePlayer?.isPlaying == true
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_music)
             .setContentTitle(title)
@@ -150,13 +170,54 @@ class PlaybackService : Service() {
             .setOnlyAlertOnce(true)
             .setShowWhen(false)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setColor(0xFF000000.toInt())
+            .setColorized(true)
             .setStyle(
-                androidx.media.app.NotificationCompat.MediaStyle()
-                    .setMediaSession(mediaSession?.sessionCompatToken)
-                    .setShowActionsInCompactView(0, 1, 2)
+                androidx.core.app.NotificationCompat.DecoratedCustomViewStyle()
             )
+            .setCustomContentView(buildCollapsedViews(playing))
+            .setCustomBigContentView(buildExpandedViews(playing))
             .build()
     }
+
+    private fun buildCollapsedViews(playing: Boolean): RemoteViews {
+        val v = RemoteViews(packageName, R.layout.notification_player_collapsed)
+        bindControls(v, playing)
+        return v
+    }
+
+    private fun buildExpandedViews(playing: Boolean): RemoteViews {
+        val v = RemoteViews(packageName, R.layout.notification_player_expanded)
+        bindControls(v, playing)
+        val exo = PlayerManager.activePlayer
+        val duration = exo?.duration?.takeIf { it != C.TIME_UNSET && it > 0 } ?: 0L
+        val position = (exo?.currentPosition ?: 0L).coerceIn(0L, duration)
+        if (duration > 0L) {
+            v.setProgressBar(
+                R.id.np_progress,
+                duration.toInt().coerceAtLeast(1),
+                position.toInt().coerceIn(0, duration.toInt()),
+                false
+            )
+        } else {
+            v.setProgressBar(R.id.np_progress, 100, 0, true)
+        }
+        return v
+    }
+
+    private fun bindControls(v: RemoteViews, playing: Boolean) {
+        v.setImageViewResource(R.id.np_play_pause, if (playing) R.drawable.ic_play_pause else R.drawable.ic_play_play)
+        v.setOnClickPendingIntent(R.id.np_prev, actionPendingIntent(ACTION_PREVIOUS, 1))
+        v.setOnClickPendingIntent(R.id.np_play_pause, actionPendingIntent(ACTION_PLAY_PAUSE, 2))
+        v.setOnClickPendingIntent(R.id.np_next, actionPendingIntent(ACTION_NEXT, 3))
+    }
+
+    private fun actionPendingIntent(action: String, requestCode: Int): PendingIntent =
+        PendingIntent.getService(
+            this, requestCode,
+            Intent(this, PlaybackService::class.java).setAction(action),
+            PendingIntent.FLAG_IMMUTABLE
+        )
 }
 
 // SimpleBasePlayer 动态代理：把 MediaSession 的标准播放命令桥接到 PlayerManager
@@ -188,8 +249,9 @@ class CarPlayerProxy(context: Context) : SimpleBasePlayer(context.mainLooper) {
 
     override fun getState(): State {
         val exo = PlayerManager.activePlayer
-        val idx = PlayerManager.currentIndex
-        val hasMedia = exo != null && idx in PlayerManager.songPaths.indices
+        val size = PlayerManager.songPaths.size
+        val idx = if (size > 0) PlayerManager.currentIndex.coerceIn(0, size - 1) else C.INDEX_UNSET
+        val hasMedia = exo != null && size > 0
         val playing = exo?.isPlaying == true
         val suppression = exo?.playbackSuppressionReason ?: Player.PLAYBACK_SUPPRESSION_REASON_NONE
 
@@ -218,11 +280,11 @@ class CarPlayerProxy(context: Context) : SimpleBasePlayer(context.mainLooper) {
             .setTotalBufferedDurationMs(SimpleBasePlayer.PositionSupplier.getConstant(exo?.totalBufferedDuration ?: 0L))
 
         if (hasMedia) {
-            builder.setPlaylist(SongsTimeline(), Tracks.EMPTY, MediaMetadata.EMPTY)
+            builder.setPlaylist(SongsTimeline(PlayerManager.songPaths.toList()), Tracks.EMPTY, MediaMetadata.EMPTY)
                 .setCurrentMediaItemIndex(idx)
         } else {
             builder.setPlaylist(Timeline.EMPTY, Tracks.EMPTY, MediaMetadata.EMPTY)
-                .setCurrentMediaItemIndex(0)
+                .setCurrentMediaItemIndex(C.INDEX_UNSET)
         }
         return builder.build()
     }
@@ -269,14 +331,14 @@ class CarPlayerProxy(context: Context) : SimpleBasePlayer(context.mainLooper) {
 }
 
 // 歌曲队列时间线：让车载/通知栏能识别整个队列，SimpleBasePlayer 据此换算上下曲窗口
-private class SongsTimeline : Timeline() {
+private class SongsTimeline(private val paths: List<String>) : Timeline() {
 
-    override fun getWindowCount(): Int = PlayerManager.songPaths.size
+    override fun getWindowCount(): Int = paths.size
 
-    override fun getPeriodCount(): Int = PlayerManager.songPaths.size
+    override fun getPeriodCount(): Int = paths.size
 
     override fun getWindow(index: Int, window: Window, defaultPositionProjectionUs: Long): Window {
-        val path = PlayerManager.songPaths.getOrNull(index) ?: return window
+        val path = paths.getOrNull(index) ?: return window
         val item = mediaItemFor(index, path)
         val durationUs = if (index == PlayerManager.currentIndex) currentDurationUs() else C.TIME_UNSET
         window.set(
@@ -287,7 +349,7 @@ private class SongsTimeline : Timeline() {
     }
 
     override fun getPeriod(index: Int, period: Period, setIds: Boolean): Period {
-        val path = PlayerManager.songPaths.getOrNull(index) ?: return period
+        val path = paths.getOrNull(index) ?: return period
         val item = mediaItemFor(index, path)
         val durationUs = if (index == PlayerManager.currentIndex) currentDurationUs() else C.TIME_UNSET
         period.set(item.mediaId, Window.SINGLE_WINDOW_UID, index, durationUs, 0L)
@@ -296,11 +358,11 @@ private class SongsTimeline : Timeline() {
 
     override fun getIndexOfPeriod(uid: Any): Int {
         val path = uid as? String ?: return C.INDEX_UNSET
-        return PlayerManager.songPaths.indexOf(path).takeIf { it >= 0 } ?: C.INDEX_UNSET
+        return paths.indexOf(path).takeIf { it >= 0 } ?: C.INDEX_UNSET
     }
 
     override fun getUidOfPeriod(index: Int): Any =
-        PlayerManager.songPaths.getOrNull(index) ?: C.INDEX_UNSET
+        paths.getOrNull(index) ?: C.INDEX_UNSET
 
     private fun mediaItemFor(index: Int, path: String): MediaItem {
         val title = if (index == PlayerManager.currentIndex) {

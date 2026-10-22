@@ -126,6 +126,10 @@ object PlayerManager {
         for (l in playbackListeners) l()
     }
 
+    internal fun notifyQueueChanged() {
+        notifyPlaybackChanged()
+    }
+
     // 应用内 DSP 音效管线：每个播放器实例一个 processor（kotlin-footguns 生产经验：
     // "One instance per player, share the parameter not the processor"——processor 带格式/缓冲
     // 状态，共享会串音；EQ/变速等全局参数在两个 processor 间同步推送）
@@ -1002,6 +1006,7 @@ object PlayerManager {
         } else if (idx == currentIndex && currentIndex >= songPaths.size) {
             currentIndex = songPaths.size - 1
         }
+        notifyPlaybackChanged()
     }
 
     // 队列被整体替换（pushToPlayer/扫描/删除）后，按"当前实际播放的媒体 path"重定位 currentIndex：

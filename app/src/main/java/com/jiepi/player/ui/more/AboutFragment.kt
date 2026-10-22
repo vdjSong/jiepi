@@ -6,13 +6,17 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.TextView
 import android.widget.Toast
 import androidx.fragment.app.Fragment
 import androidx.navigation.fragment.findNavController
 import com.jiepi.player.BuildConfig
 import com.jiepi.player.R
 import com.jiepi.player.databinding.FragmentAboutBinding
+import com.jiepi.player.ui.NeonCard
 import com.jiepi.player.update.UpdateManager
 
 /**
@@ -107,6 +111,52 @@ class AboutFragment : Fragment() {
                 }
                 .setNegativeButton("暂不更新", null)
                 .show()
+                .let { styleDialog(it) }
+        }
+    }
+
+    private fun styleDialog(dialog: AlertDialog) {
+        dialog.window?.setBackgroundDrawable(NeonCard.cardBackground(requireContext()))
+        dialog.window?.decorView?.post {
+            val decor = dialog.window?.decorView ?: return@post
+            applyDialogTextColor(decor)
+        }
+    }
+
+    private fun applyDialogTextColor(view: View) {
+        when (view) {
+            is EditText -> {
+                view.setTextColor(NeonCard.WHITE)
+                view.setHintTextColor(NeonCard.SUB)
+                view.setBackgroundResource(R.drawable.bg_input_rounded)
+            }
+            is android.widget.CompoundButton -> {
+                view.setTextColor(NeonCard.WHITE)
+                view.buttonTintList =
+                    android.content.res.ColorStateList.valueOf(NeonCard.WHITE)
+            }
+            is android.widget.CheckedTextView -> {
+                view.setTextColor(NeonCard.WHITE)
+                view.checkMarkTintList =
+                    android.content.res.ColorStateList.valueOf(NeonCard.WHITE)
+            }
+            is Button -> {
+                view.setTextColor(NeonCard.WHITE)
+                val density = view.resources.displayMetrics.density
+                view.setBackgroundResource(R.drawable.bg_dialog_button)
+                view.setPadding(
+                    (24 * density).toInt(),
+                    view.paddingTop,
+                    (24 * density).toInt(),
+                    view.paddingBottom
+                )
+            }
+            is TextView -> view.setTextColor(NeonCard.WHITE)
+        }
+        if (view is ViewGroup) {
+            for (i in 0 until view.childCount) {
+                applyDialogTextColor(view.getChildAt(i))
+            }
         }
     }
 }
