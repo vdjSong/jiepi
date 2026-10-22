@@ -15,3 +15,6 @@ local.properties
 /compile_check.log
 /hs_err_pid*.log
 .kotlin
+*.jks
+*.keystore
+*.p12
