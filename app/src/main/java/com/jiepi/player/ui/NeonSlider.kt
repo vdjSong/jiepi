@@ -38,6 +38,8 @@ class NeonSlider @JvmOverloads constructor(
 
     var vertical: Boolean = false
 
+    var showThumb: Boolean = true
+
     var seekServiceAction: String? = null
 
     fun setOnProgressChangeListener(l: OnProgressChangeListener?) {
@@ -136,44 +138,46 @@ class NeonSlider @JvmOverloads constructor(
             }
         }
 
-        // 胶囊滑块：白色主体 + 青色描边 + 外圈光晕
-        val thumbW = dp(if (isDragging) 26f else 24f)
-        val thumbH = dp(if (isDragging) 22f else 20f)
-        val cx = if (max > 0) {
-            val usable = width - thumbW
-            thumbW / 2f + usable * progress / max
-        } else thumbW / 2f
-        val cy = height / 2f
-        val left = cx - thumbW / 2f
-        val top = cy - thumbH / 2f
-        val right = cx + thumbW / 2f
-        val bottom = cy + thumbH / 2f
+        if (showThumb) {
+            // 胶囊滑块：白色主体 + 青色描边 + 外圈光晕
+            val thumbW = dp(if (isDragging) 26f else 24f)
+            val thumbH = dp(if (isDragging) 22f else 20f)
+            val cx = if (max > 0) {
+                val usable = width - thumbW
+                thumbW / 2f + usable * progress / max
+            } else thumbW / 2f
+            val cy = height / 2f
+            val left = cx - thumbW / 2f
+            val top = cy - thumbH / 2f
+            val right = cx + thumbW / 2f
+            val bottom = cy + thumbH / 2f
 
-        // 光晕：半透明青，略大于滑块
-        val glowPad = dp(4f)
-        glowPaint.style = Paint.Style.FILL
-        glowPaint.color = if (isDragging) 0x5538BDF8.toInt() else 0x2638BDF8.toInt()
-        canvas.drawRoundRect(
-            RectF(left - glowPad, top - glowPad, right + glowPad, bottom + glowPad),
-            thumbH / 2f + glowPad, thumbH / 2f + glowPad, glowPaint
-        )
+            // 光晕：半透明青，略大于滑块
+            val glowPad = dp(4f)
+            glowPaint.style = Paint.Style.FILL
+            glowPaint.color = if (isDragging) 0x5538BDF8.toInt() else 0x2638BDF8.toInt()
+            canvas.drawRoundRect(
+                RectF(left - glowPad, top - glowPad, right + glowPad, bottom + glowPad),
+                thumbH / 2f + glowPad, thumbH / 2f + glowPad, glowPaint
+            )
 
-        // 主体
-        thumbPaint.style = Paint.Style.FILL
-        thumbPaint.color = 0xFFF5F5F5.toInt()
-        canvas.drawRoundRect(
-            RectF(left, top, right, bottom),
-            thumbH / 2f, thumbH / 2f, thumbPaint
-        )
+            // 主体
+            thumbPaint.style = Paint.Style.FILL
+            thumbPaint.color = 0xFFF5F5F5.toInt()
+            canvas.drawRoundRect(
+                RectF(left, top, right, bottom),
+                thumbH / 2f, thumbH / 2f, thumbPaint
+            )
 
-        // 描边
-        thumbStrokePaint.style = Paint.Style.STROKE
-        thumbStrokePaint.strokeWidth = dp(1.5f)
-        thumbStrokePaint.color = 0xFF38BDF8.toInt()
-        canvas.drawRoundRect(
-            RectF(left, top, right, bottom),
-            thumbH / 2f, thumbH / 2f, thumbStrokePaint
-        )
+            // 描边
+            thumbStrokePaint.style = Paint.Style.STROKE
+            thumbStrokePaint.strokeWidth = dp(1.5f)
+            thumbStrokePaint.color = 0xFF38BDF8.toInt()
+            canvas.drawRoundRect(
+                RectF(left, top, right, bottom),
+                thumbH / 2f, thumbH / 2f, thumbStrokePaint
+            )
+        }
     }
 
     private fun drawVertical(canvas: Canvas) {
@@ -202,37 +206,40 @@ class NeonSlider @JvmOverloads constructor(
             }
         }
 
-        val thumbH = dp(if (isDragging) 26f else 24f)
-        val thumbW = dp(if (isDragging) 22f else 20f)
-        val cy = if (max > 0) {
-            val usable = height - thumbH
-            height - (thumbH / 2f + usable * progress / max)
-        } else height - thumbH / 2f
-        val cx = width / 2f
-        val left = cx - thumbW / 2f
-        val top = cy - thumbH / 2f
-        val right = cx + thumbW / 2f
-        val bottom = cy + thumbH / 2f
+        if (showThumb) {
+            val thumbH = dp(if (isDragging) 26f else 24f)
+            val thumbW = dp(if (isDragging) 22f else 20f)
+            val cy = if (max > 0) {
+                val usable = height - thumbH
+                height - (thumbH / 2f + usable * progress / max)
+            } else height - thumbH / 2f
+            val cx = width / 2f
+            val left = cx - thumbW / 2f
+            val top = cy - thumbH / 2f
+            val right = cx + thumbW / 2f
+            val bottom = cy + thumbH / 2f
 
-        val glowPad = dp(4f)
-        glowPaint.style = Paint.Style.FILL
-        glowPaint.color = if (isDragging) 0x5538BDF8.toInt() else 0x2638BDF8.toInt()
-        canvas.drawRoundRect(
-            RectF(left - glowPad, top - glowPad, right + glowPad, bottom + glowPad),
-            thumbH / 2f + glowPad, thumbH / 2f + glowPad, glowPaint
-        )
+            val glowPad = dp(4f)
+            glowPaint.style = Paint.Style.FILL
+            glowPaint.color = if (isDragging) 0x5538BDF8.toInt() else 0x2638BDF8.toInt()
+            canvas.drawRoundRect(
+                RectF(left - glowPad, top - glowPad, right + glowPad, bottom + glowPad),
+                thumbH / 2f + glowPad, thumbH / 2f + glowPad, glowPaint
+            )
 
-        thumbPaint.style = Paint.Style.FILL
-        thumbPaint.color = 0xFFF5F5F5.toInt()
-        canvas.drawRoundRect(RectF(left, top, right, bottom), thumbH / 2f, thumbH / 2f, thumbPaint)
+            thumbPaint.style = Paint.Style.FILL
+            thumbPaint.color = 0xFFF5F5F5.toInt()
+            canvas.drawRoundRect(RectF(left, top, right, bottom), thumbH / 2f, thumbH / 2f, thumbPaint)
 
-        thumbStrokePaint.style = Paint.Style.STROKE
-        thumbStrokePaint.strokeWidth = dp(1.5f)
-        thumbStrokePaint.color = 0xFF38BDF8.toInt()
-        canvas.drawRoundRect(RectF(left, top, right, bottom), thumbH / 2f, thumbH / 2f, thumbStrokePaint)
+            thumbStrokePaint.style = Paint.Style.STROKE
+            thumbStrokePaint.strokeWidth = dp(1.5f)
+            thumbStrokePaint.color = 0xFF38BDF8.toInt()
+            canvas.drawRoundRect(RectF(left, top, right, bottom), thumbH / 2f, thumbH / 2f, thumbStrokePaint)
+        }
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (!showThumb) return false
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 isDragging = true

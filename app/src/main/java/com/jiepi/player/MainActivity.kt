@@ -13,6 +13,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.navigation.NavOptions
 import androidx.navigation.findNavController
 import com.jiepi.player.databinding.ActivityMainBinding
+import com.jiepi.player.update.UpdateManager
 
 class MainActivity : AppCompatActivity() {
 
@@ -42,6 +43,9 @@ class MainActivity : AppCompatActivity() {
 
         // 恢复上次调好的 EQ/音效（杀进程后不丢）
         PlayerManager.initFx(this)
+
+        // 更新包安装完成后新版本启动，自动清理缓存的旧安装包
+        UpdateManager.cleanCachedApk(this)
 
         // 状态栏：黑底 + 白色图标（时间、电量、信号都变白），固定黑色风格，深浅模式都一样
         // 注意：浅色主题默认图标是深色，黑底上看不见，必须强制改成白色

@@ -4,12 +4,16 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.widget.Toast
 import androidx.core.content.FileProvider
 import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.concurrent.Callable
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import org.json.JSONObject
 
 /**
@@ -24,19 +28,23 @@ object UpdateManager {
 
     /** 检查更新 API 候选：官方直连 + 国内加速代理，依次尝试，成功即停 */
     private val apiCandidates = listOf(
-        RELEASE_API,
-        "https://github.akams.cn/$RELEASE_API",
-        "https://gh-proxy.com/$RELEASE_API",
-        "https://ghfast.top/$RELEASE_API"
+        "https://gh-proxy.org/$RELEASE_API",
+        "https://hub.glowp.xyz/$RELEASE_API",
+        RELEASE_API
     )
 
     /** APK 下载候选：国内加速镜像（前缀代理）+ 官方直连兜底，依次尝试，成功即停 */
     private fun downloadCandidates(rawUrl: String): List<String> = listOf(
-        "https://gh-proxy.com/$rawUrl",
-        "https://ghfast.top/$rawUrl",
-        "https://ghproxy.net/$rawUrl",
-        "https://github.akams.cn/$rawUrl",
-        "https://ghproxy.homeboyc.cn/$rawUrl",
+        "https://gh-proxy.org/$rawUrl",
+        "https://fastgit.cc/$rawUrl",
+        "https://github.boki.moe/$rawUrl",
+        "https://gh.chjina.com/$rawUrl",
+        "https://cdn.crashmc.com/$rawUrl",
+        "https://cors.isteed.cc/$rawUrl",
+        "https://hub.glowp.xyz/$rawUrl",
+        "https://git.yylx.win/$rawUrl",
+        "https://ghfile.geekertao.top/$rawUrl",
+        "https://gh.monlor.com/$rawUrl",
         rawUrl // 官方直连兜底
     )
 
@@ -115,11 +123,13 @@ object UpdateManager {
 
     /**
      * 后台下载 APK 到应用缓存目录，完成后回调（主线程）。
+     * onProgress(pct)：下载进度 0~100（主线程回调；总长度未知时回调 -1，UI 显示"下载中"）。
      * onDone(file, error)：file 为下载好的 APK；error 非空表示失败。
      */
     fun downloadApk(
         context: Context,
         url: String,
+        onProgress: (Int) -> Unit,
         onDone: (file: File?, error: String?) -> Unit
     ) {
         Thread {
@@ -129,8 +139,8 @@ object UpdateManager {
                 val dir = File(context.cacheDir, APK_DIR)
                 dir.mkdirs()
                 file = File(dir, "jiepi-update.apk")
-                // 依次尝试国内加速镜像，最后官方直连兜底；任一源成功即停
-                for (candidate in downloadCandidates(url)) {
+                // 测速排序：所有源先并行试速，从快到慢依次正式下载；任一源成功即停
+                for (candidate in speedRankCandidates(downloadCandidates(url))) {
                     var conn: HttpURLConnection? = null
                     try {
                         conn = URL(candidate).openConnection() as HttpURLConnection
@@ -138,8 +148,35 @@ object UpdateManager {
                         conn.readTimeout = 30000
                         conn.setRequestProperty("Accept", "application/octet-stream")
                         if (conn.responseCode == 200) {
+                            val total = conn.contentLength
+                            // 换新源时先重置进度
+                            reportProgress(context, onProgress, 0)
+                            var lastPct = -1
+                            var lastUnknownReport = 0L
                             conn.inputStream.use { input ->
-                                FileOutputStream(file).use { out -> input.copyTo(out) }
+                                FileOutputStream(file).use { out ->
+                                    val buf = ByteArray(8192)
+                                    var read: Int
+                                    var done = 0L
+                                    while (input.read(buf).also { read = it } != -1) {
+                                        out.write(buf, 0, read)
+                                        done += read
+                                        if (total > 0) {
+                                            // 总长度已知：按百分比回调（仅在百分比变化时通知，避免刷屏）
+                                            val pct = ((done * 100) / total).toInt().coerceIn(0, 100)
+                                            if (pct != lastPct) {
+                                                lastPct = pct
+                                                reportProgress(context, onProgress, pct)
+                                            }
+                                        } else {
+                                            // 总长度未知：每下载约 256KB 通知一次"仍在下载"
+                                            if (done - lastUnknownReport >= 262144) {
+                                                lastUnknownReport = done
+                                                reportProgress(context, onProgress, -1)
+                                            }
+                                        }
+                                    }
+                                }
                             }
                             err = null
                             break
@@ -165,8 +202,68 @@ object UpdateManager {
         }.start()
     }
 
-    /** 调系统安装器安装 APK（Android 8+ 会引导用户允许"安装未知应用"） */
-    fun installApk(context: Context, file: File) {
+    /** Parallel speed probe: download first 128KB from each candidate, rank fastest first; failures keep original order. */
+    private fun speedRankCandidates(candidates: List<String>): List<String> {
+        val pool = Executors.newFixedThreadPool(candidates.size)
+        val futures = candidates.map { cand ->
+            pool.submit(Callable { measureSpeed(cand) })
+        }
+        val measured = mutableListOf<Pair<String, Long>>()
+        for (f in futures) {
+            try {
+                val r = f.get(10, TimeUnit.SECONDS)
+                if (r != null) measured.add(r)
+            } catch (e: Exception) {
+            }
+        }
+        pool.shutdownNow()
+        measured.sortByDescending { it.second }
+        val fast = measured.map { it.first }
+        return fast + candidates.filter { it !in fast }
+    }
+
+    /** Probe one candidate: read first 128KB then disconnect, return (url, bytes/sec) or null on failure. */
+    private fun measureSpeed(candidate: String): Pair<String, Long>? {
+        var conn: HttpURLConnection? = null
+        try {
+            conn = URL(candidate).openConnection() as HttpURLConnection
+            conn.connectTimeout = 6000
+            conn.readTimeout = 6000
+            conn.setRequestProperty("Accept", "application/octet-stream")
+            if (conn.responseCode != 200) return null
+            val start = System.currentTimeMillis()
+            var total = 0L
+            val buf = ByteArray(8192)
+            conn.inputStream.use { input ->
+                while (total < 131072) {
+                    val read = input.read(buf)
+                    if (read == -1) break
+                    total += read
+                }
+            }
+            val elapsed = System.currentTimeMillis() - start
+            if (elapsed <= 0) return null
+            return candidate to (total * 1000 / elapsed)
+        } catch (e: Exception) {
+            return null
+        } finally {
+            conn?.disconnect()
+        }
+    }
+
+    /** 下载进度回调切到主线程执行（无 Activity 时降级为直接回调） */
+    private fun reportProgress(context: Context, onProgress: (Int) -> Unit, pct: Int) {
+        (context as? Activity)?.runOnUiThread { onProgress(pct) } ?: onProgress(pct)
+    }
+
+    /** 调系统安装器安装 APK（Android 8+ 会引导用户允许"安装未知应用"）。
+     * 返回 false 表示缺少"安装未知应用"权限，需要先到系统设置开启。 */
+    fun installApk(context: Context, file: File): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            !context.packageManager.canRequestPackageInstalls()
+        ) {
+            return false
+        }
         val uri: Uri = FileProvider.getUriForFile(
             context,
             context.packageName + ".fileprovider",
@@ -180,6 +277,14 @@ object UpdateManager {
             context.startActivity(intent)
         } catch (e: Exception) {
             Toast.makeText(context, "无法打开安装器：${e.message}", Toast.LENGTH_SHORT).show()
+            return false
         }
+        return true
+    }
+
+    /** 清理缓存的旧更新包（新版本启动时调用，实现安装完成后自动删除） */
+    fun cleanCachedApk(context: Context) {
+        val dir = File(context.cacheDir, APK_DIR)
+        dir.listFiles()?.forEach { it.delete() }
     }
 }

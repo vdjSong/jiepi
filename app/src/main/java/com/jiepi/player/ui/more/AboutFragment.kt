@@ -2,7 +2,10 @@ package com.jiepi.player.ui.more
 
 import android.app.AlertDialog
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.provider.Settings
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -17,7 +20,9 @@ import com.jiepi.player.BuildConfig
 import com.jiepi.player.R
 import com.jiepi.player.databinding.FragmentAboutBinding
 import com.jiepi.player.ui.NeonCard
+import com.jiepi.player.ui.NeonSlider
 import com.jiepi.player.update.UpdateManager
+import java.io.File
 
 /**
  * 关于页：
@@ -27,6 +32,9 @@ class AboutFragment : Fragment() {
 
     private var _binding: FragmentAboutBinding? = null
     private val binding get() = _binding!!
+
+    /** 等待用户开启"安装未知应用"权限后自动重试的安装包 */
+    private var pendingInstall: File? = null
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -47,6 +55,12 @@ class AboutFragment : Fragment() {
         val ids = listOf(R.id.btnLeft, R.id.floatingActionButton2, R.id.btnRight)
         for (id in ids) {
             requireActivity().findViewById<View>(id)?.visibility = View.GONE
+        }
+        // 从"允许安装未知应用"设置页返回后，自动重试拉起安装器
+        val f = pendingInstall
+        if (f != null) {
+            pendingInstall = null
+            tryInstall(requireContext(), f)
         }
     }
 
@@ -100,19 +114,111 @@ class AboutFragment : Fragment() {
                 .setTitle("发现新版本 v$latestTag")
                 .setMessage("当前版本 v$current\n是否立即下载并安装？")
                 .setPositiveButton("立即更新") { _, _ ->
-                    Toast.makeText(ctx, "正在下载更新包…", Toast.LENGTH_SHORT).show()
-                    UpdateManager.downloadApk(ctx, apkUrl!!) { file, downloadError ->
-                        if (downloadError != null || file == null) {
-                            Toast.makeText(ctx, downloadError ?: "下载失败", Toast.LENGTH_SHORT).show()
-                        } else {
-                            UpdateManager.installApk(ctx, file)
-                        }
-                    }
+                    showDownloadDialog(ctx, apkUrl!!)
                 }
                 .setNegativeButton("暂不更新", null)
                 .show()
                 .let { styleDialog(it) }
         }
+    }
+
+    /**
+     * 下载进度对话框：
+     * 下载过程实时显示百分比进度条，下载完成自动调系统安装器；失败/取消时关闭并提示。
+     */
+    private fun showDownloadDialog(ctx: Context, apkUrl: String) {
+        val density = ctx.resources.displayMetrics.density
+        val progressText = TextView(ctx).apply {
+            text = "0%"
+            setTextColor(NeonCard.WHITE)
+            textSize = 13f
+        }
+        val slider = NeonSlider(ctx).apply {
+            showThumb = false
+            max = 100
+            progress = 0
+        }
+        val content = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            setPadding(
+                (20 * density).toInt(), (12 * density).toInt(),
+                (20 * density).toInt(), (20 * density).toInt()
+            )
+            addView(
+                slider,
+                LinearLayout.LayoutParams(0, (8 * density).toInt(), 1f)
+            )
+            addView(
+                progressText,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { leftMargin = (12 * density).toInt() })
+        }
+        val dialog = AlertDialog.Builder(ctx)
+            .setTitle("正在下载更新包")
+            .setView(content)
+            .setCancelable(false)
+            .create()
+        dialog.window?.setBackgroundDrawable(NeonCard.cardBackground(ctx))
+        dialog.show()
+        dialog.window?.decorView?.post {
+            val decor = dialog.window?.decorView ?: return@post
+            applyDialogTextColor(decor)
+        }
+
+        UpdateManager.downloadApk(
+            ctx, apkUrl,
+            onProgress = { pct ->
+                if (!dialog.isShowing) return@downloadApk
+                if (pct < 0) {
+                    progressText.text = "…"
+                } else {
+                    slider.progress = pct
+                    progressText.text = "$pct%"
+                }
+            },
+            onDone = { file, downloadError ->
+                if (dialog.isShowing) dialog.dismiss()
+                if (downloadError != null || file == null) {
+                    Toast.makeText(ctx, downloadError ?: "下载失败", Toast.LENGTH_SHORT).show()
+                } else {
+                    tryInstall(ctx, file)
+                }
+            }
+        )
+    }
+
+    /**
+     * 下载完成后的安装：
+     * 已授予"安装未知应用"权限 → 直接拉起系统安装器；
+     * 未授权 → 弹窗提示并引导去设置开启，授权返回后自动重试安装。
+     */
+    private fun tryInstall(ctx: Context, file: File) {
+        if (UpdateManager.installApk(ctx, file)) {
+            return
+        }
+        val sizeMb = "%.1f".format(file.length() / 1024.0 / 1024.0)
+        AlertDialog.Builder(ctx)
+            .setTitle("更新包下载完成")
+            .setMessage("大小：$sizeMb MB\n需要允许\"洁癖播放器\"安装未知应用，才能继续安装。")
+            .setPositiveButton("去开启") { _, _ ->
+                pendingInstall = file
+                val intent = Intent(
+                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:" + ctx.packageName)
+                )
+                try {
+                    ctx.startActivity(intent)
+                } catch (e: Exception) {
+                    pendingInstall = null
+                    Toast.makeText(ctx, "请到系统设置中手动开启安装未知应用权限", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("暂不安装", null)
+            .show()
+            .let { styleDialog(it) }
     }
 
     private fun styleDialog(dialog: AlertDialog) {

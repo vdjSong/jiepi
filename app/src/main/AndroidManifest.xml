@@ -3,6 +3,8 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- 安装未知应用：下载更新 APK 后调系统安装器覆盖安装所需（Android 8+ 强制） -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- 预埋权限：功能尚未接入，先声明占位，后续对应功能接入时启用 -->
     <!-- 联网检查更新：网络权限 + 网络状态 -->
