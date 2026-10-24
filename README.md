@@ -1,5 +1,7 @@
 # 洁癖播放器（jiepi）
 
+> **Author**: Song (GitHub: [vdjSong](https://github.com/vdjSong)) · **Copyright** (c) 2026 · Licensed under [GPL-3.0](LICENSE)
+
 一款纯本地、无广告、轻量干净的 Android 音乐播放器。
 
 ## 特性

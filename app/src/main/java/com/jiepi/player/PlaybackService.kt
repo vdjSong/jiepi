@@ -1,3 +1,5 @@
+// jiepi - A pure local Android music player.
+// Copyright (c) 2026 vdjSong. Licensed under GPL-3.0.
 package com.jiepi.player
 
 import android.app.Notification
