@@ -40,6 +40,12 @@ class PlayFragment : Fragment() {
     private data class LyricLine(val timeMs: Long, val text: String)
     private var lyrics = listOf<LyricLine>()
     private var lastLyricIndex = -1
+    // 歌词动态时钟：position（听感轴）直接 × speed 会让非零基准跟着放大，
+    // 变速/seek 瞬间歌词狂跳。用锚点锁定基准，只对 position 增量乘速度。
+    private var lyricAnchorPos = 0   // 听感 position 锚点
+    private var lyricAnchorMs = 0    // 锚点处歌词原曲进度
+    private var lastLyricMs = 0      // 最近歌词进度（变速锚定用）
+    private var lastSpeed = PlayerManager.speed
     // 详情页当前显示的是第几首歌（自动切歌/手动切歌都靠它检测）
     private var lastSongIndex = -1
     // 播放/暂停图标上次刷的状态（只在真正变化时才重绘，避免周期刷新闪跳）
@@ -220,8 +226,8 @@ class PlayFragment : Fragment() {
         binding.timeCurrent.text = formatTime(position)
         binding.timeTotal.text = formatTime(duration)
 
-        // 跟着进度换歌词
-        updateLyric(position)
+        // 跟着进度换歌词：走歌词动态时钟（锚定基准，只对增量乘变速系数）
+        advanceLyric(position)
 
         // 定时到点 pause() 后图标要跟着变（只在状态真正变化时重绘，不闪跳）
         updatePlayIcon()
@@ -253,6 +259,11 @@ class PlayFragment : Fragment() {
     private fun loadLrc() {
         lyrics = emptyList()
         lastLyricIndex = -1
+        // 切歌/重载歌词：歌词时钟归零，从新歌起点重新积分
+        lyricAnchorPos = 0
+        lyricAnchorMs = 0
+        lastLyricMs = 0
+        lastSpeed = PlayerManager.speed
         val idx = PlayerManager.currentIndex
         if (idx !in PlayerManager.songNames.indices) {
             binding.lyricText.text = "还没有播放歌曲"
@@ -403,6 +414,25 @@ class PlayFragment : Fragment() {
     private fun showLyricHint() {
         binding.lyricBox.visibility = View.GONE
         binding.lyricText.visibility = View.VISIBLE
+    }
+
+    // 歌词动态时钟推进：只对 position 增量乘速度，变速瞬间锚定当前位置不跳变
+    private fun advanceLyric(positionMs: Int) {
+        if (lyrics.isEmpty()) return
+        val speed = PlayerManager.speed
+        // 前进跳变 >3s 或回退 = seek/切歌：position 就是新位置的原曲进度，直接锚定
+        val seekJump = positionMs < lyricAnchorPos || positionMs - lyricAnchorPos > 3000
+        if (lastSpeed != speed) {
+            // 变速：锚定到当前歌词进度，保持连续（不瞬间跳变）
+            lyricAnchorMs = lastLyricMs
+            lyricAnchorPos = positionMs
+            lastSpeed = speed
+        } else if (seekJump) {
+            lyricAnchorMs = positionMs
+            lyricAnchorPos = positionMs
+        }
+        lastLyricMs = lyricAnchorMs + ((positionMs - lyricAnchorPos) * speed).toInt()
+        updateLyric(lastLyricMs)
     }
 
     // 按播放位置更新当前歌词行

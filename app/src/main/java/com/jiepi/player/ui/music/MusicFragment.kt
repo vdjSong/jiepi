@@ -66,6 +66,9 @@ class MusicFragment : Fragment() {
         private var cachedSongs: List<Song>? = null
         // 磁盘缓存文件名（存在 App 私有目录，不需要任何权限）
         private const val SONGS_CACHE_FILE = "jiepi_songs_cache.json"
+        // 外部（回收站恢复歌曲）通知歌曲页自动刷新：由本页面 onViewCreated 赋值、
+        // onDestroyView 置空，避免 LocalBroadcast/导航传参等重改，单向最小代价打通
+        var onSongsRestoredExternally: (() -> Unit)? = null
     }
 
     // 一首歌的信息：name 是文件原名（稳定键：歌词匹配/回收站/磁盘缓存定位仍用它），id3 字段用于列表显示
@@ -342,6 +345,10 @@ class MusicFragment : Fragment() {
         binding.songSwipe.setProgressViewOffset(false, -dp(64), dp(24))
         binding.songSwipe.setDistanceToTriggerSync(dp(90))
         binding.songSwipe.setOnRefreshListener { scanSongsAsync() }
+
+        // 回收站恢复歌曲后自动刷新本页列表（等同一次下拉刷新）：view 存活时生效，
+        // 页面已销毁时回调为 null，恢复后返回本页 onViewCreated 本来就会扫描，不会漏
+        onSongsRestoredExternally = { scanSongsAsync() }
     }
 
     // 建右侧索引条：每个字母一个 TextView（不自己抢触摸，点击/滑动都由整条条统一处理）
@@ -1296,23 +1303,69 @@ class MusicFragment : Fragment() {
     }
 
     // 编辑歌单（歌单行三点按钮）：改歌单名，空名/重名不收
+    // 自绘霓虹卡片 + 输入框限宽 280dp（与新建歌单同款），修掉系统 AlertDialog 输入框超宽的老毛病
     private fun showRenamePlaylistDialog(p: Playlist) {
+        val dialog = Dialog(requireContext())
+        dialog.setCanceledOnTouchOutside(true)
+        // 去掉系统默认白底方框，露出自己的圆角卡片
+        dialog.window?.setBackgroundDrawable(ColorDrawable(android.graphics.Color.TRANSPARENT))
+
+        val root = buildNeonCardRoot()
+
+        // 标题：编辑歌单
+        val titleTv = TextView(requireContext()).apply {
+            text = "编辑歌单"
+            textSize = 17f
+            setTextColor(NeonCard.WHITE)
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            gravity = Gravity.CENTER_HORIZONTAL
+        }
+        root.addView(titleTv, LinearLayout.LayoutParams(dp(280), ViewGroup.LayoutParams.WRAP_CONTENT))
+
+        // 副标题小字
+        val subTv = TextView(requireContext()).apply {
+            text = "改个名字，空名/重名不收"
+            textSize = 12f
+            setTextColor(NeonCard.SUB)
+            gravity = Gravity.CENTER_HORIZONTAL
+        }
+        root.addView(subTv, LinearLayout.LayoutParams(dp(280), ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(4)
+        })
+
+        // 输入框：预填当前歌单名、光标落末尾；白字 + 灰提示字 + 圆角深灰底；宽度限死在 280dp 卡片宽内
         val input = EditText(requireContext()).apply {
             setText(p.name)
+            setSelection(p.name.length)
             hint = "歌单名字"
             setTextColor(NeonCard.WHITE)
             setHintTextColor(NeonCard.SUB)
+            setBackgroundResource(R.drawable.bg_input_rounded)
+            setPadding(dp(16), 0, dp(16), 0)
+            maxLines = 1
         }
-        val dialog = AlertDialog.Builder(requireContext())
-            .setTitle("编辑歌单")
-            .setView(input)
-            .setPositiveButton("保存") { _, _ ->
+        root.addView(input, LinearLayout.LayoutParams(dp(280), dp(52)).apply { topMargin = dp(14) })
+
+        // 底部：取消 / 保存（保存字色染绿，编辑正向语义，跟新建歌单一致）
+        val btnRow = LinearLayout(requireContext()).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+        }
+        btnRow.addView(
+            buildNeonButton("取消", NeonCard.WHITE) { dialog.dismiss() },
+            LinearLayout.LayoutParams(0, dp(52)).apply { weight = 1f; marginEnd = dp(10) }
+        )
+        btnRow.addView(
+            buildNeonButton("保存", NeonCard.GREEN) {
                 val newName = input.text.toString().trim()
                 when {
                     newName.isEmpty() -> Toast.makeText(requireContext(), "歌单名不能是空的", Toast.LENGTH_SHORT).show()
-                    newName == p.name -> Unit // 没改就不动
+                    newName == p.name -> dialog.dismiss() // 没改就不动
                     playlists.any { it.name == newName } -> Toast.makeText(requireContext(), "已经有同名歌单了", Toast.LENGTH_SHORT).show()
                     else -> {
+                        dialog.dismiss()
                         // 展开状态标记跟着新名字走，避免改完名展开标记对不上
                         if (expandedPlaylistName == p.name) expandedPlaylistName = newName
                         p.name = newName
@@ -1321,10 +1374,13 @@ class MusicFragment : Fragment() {
                         Toast.makeText(requireContext(), "歌单已改名：$newName", Toast.LENGTH_SHORT).show()
                     }
                 }
-            }
-            .setNegativeButton("取消", null)
-            .show()
-        styleDialog(dialog)
+            },
+            LinearLayout.LayoutParams(0, dp(52)).apply { weight = 1f; marginStart = dp(10) }
+        )
+        root.addView(btnRow, LinearLayout.LayoutParams(dp(280), ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(14) })
+
+        dialog.setContentView(root)
+        dialog.show()
     }
 
     // 新建歌单：弹输入框，空名/重名不收
@@ -2266,6 +2322,15 @@ class MusicFragment : Fragment() {
                     folderUris.removeAll(toDelete)
                     saveFolders()
                     refreshFolderList()
+                    // 立即同步播放队列：被删文件夹里的歌马上从队列移除（不等后台扫描）
+                    // 正在播的歌在里面 → realign 立刻停播/切走，不会继续放"已不存在的文件夹"的歌
+                    val deletedSet = toDelete.toSet()
+                    for (i in PlayerManager.songPaths.indices.reversed()) {
+                        if (PlayerManager.songDirs.getOrNull(i) in deletedSet) {
+                            PlayerManager.removeSongFromQueue(PlayerManager.songPaths[i])
+                        }
+                    }
+                    PlayerManager.realignCurrentIndex(requireContext())
                     // 文件夹没了，歌曲集合跟着对齐（后台扫，界面不卡）
                     scanSongsAsync()
                     Toast.makeText(requireContext(), "已删除 ${toDelete.size} 个文件夹", Toast.LENGTH_SHORT).show()
@@ -2621,6 +2686,8 @@ class MusicFragment : Fragment() {
         super.onDestroyView()
         // 页面销毁：取消切歌监听，别让回调打到已销毁的列表上
         PlayerManager.removeSongChangeListener(onSongChangeListener)
+        // 外部刷新回调失效：防止回收站恢复时打到已销毁的 view（onViewCreated 里重新赋值）
+        onSongsRestoredExternally = null
         // 歌曲页重建标记失效：下次 view 重建后 selectCategory 必须重新 setAdapter
         refreshedSongVersion = -1
         _binding = null

@@ -12,7 +12,9 @@ import androidx.fragment.app.Fragment
 import androidx.navigation.fragment.findNavController
 import com.jiepi.player.R
 import com.jiepi.player.databinding.FragmentRecycleBinBinding
+import com.jiepi.player.PlayerManager
 import com.jiepi.player.ui.NeonCard
+import com.jiepi.player.ui.music.MusicFragment
 import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
@@ -186,7 +188,8 @@ class RecycleBinFragment : Fragment() {
         }
     }
 
-    // 恢复：从回收站移除记录 + 排除表去掉该路径，歌曲页下拉重新扫描即可回列表
+    // 恢复：从回收站移除记录 + 排除表去掉该路径 + 播放队列立即补回这首歌；
+    // 歌曲页返回时会自动重新扫描，恢复的歌自然回列表
     private fun restoreEntry(i: Int) {
         if (i !in entries.indices) return
         val e = entries[i]
@@ -195,7 +198,21 @@ class RecycleBinFragment : Fragment() {
         removed.remove(e.path)
         saveRemovedPaths(removed)
         saveEntries()
-        Toast.makeText(requireContext(), "已恢复：${e.name}（歌曲页下拉刷新后出现）", Toast.LENGTH_SHORT).show()
+        // 播放队列立即补回这首歌（对称删除歌曲时的 removeSongFromQueue）：
+        // 不打断正在播的当前曲，恢复的歌进队尾；播完当前歌后能自然切到它，
+        // 解决"恢复后队列不更新、播完当前歌不切下一首"的问题
+        // （目录/ID3 细节等歌曲页扫描完成由 pushToPlayer 全量补齐）
+        PlayerManager.addSongToQueue(
+            e.path,
+            e.name,
+            "",
+            e.name.substringBeforeLast('.'),
+            ""
+        )
+        // 顺带通知歌曲页自动刷新（等同一次下拉扫描）：恢复的歌立刻出现在歌曲页列表，
+        // 不用用户手动下拉。歌曲页 view 已销毁时回调为 null，返回歌曲页时本页自动扫描兜底
+        MusicFragment.onSongsRestoredExternally?.invoke()
+        Toast.makeText(requireContext(), "已恢复：${e.name}（返回歌曲页即可看到）", Toast.LENGTH_SHORT).show()
         buildPage()
     }
 }

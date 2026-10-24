@@ -10,6 +10,8 @@
 local.properties
 /temp
 /build_log.txt
+/build_log*.txt
+/build_debug_out.txt
 /build_out.txt
 /build_out.log
 /compile_check.log

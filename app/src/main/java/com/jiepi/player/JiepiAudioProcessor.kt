@@ -158,6 +158,13 @@ class JiepiAudioProcessor : AudioProcessor {
             val s = speed.coerceIn(0.5f, 2f)
             val p = pitch.coerceIn(0.5f, 2f)
             if (s == targetSpeed && p == targetPitch) return
+            // 引擎已被归零销毁/从未创建，重新开变速变调：new 干净实例再武装（官方标准）。
+            // sampleRate>0 兜底：播放前（未 configure）只记参数，configure 会负责创建；
+            // 归零销毁不在这里做——由播放线程 queueInput 直通块负责，避免 UI 线程
+            // close 与播放线程 writeShort 的并发竞态。
+            if (sonic == null && sampleRate > 0) {
+                sonic = RubberBandStream(sampleRate, channelCount)
+            }
             fadeFromSpeed = sonic?.getSpeed() ?: targetSpeed
             fadeFromPitch = sonic?.getPitch() ?: targetPitch
             targetSpeed = s
@@ -440,6 +447,14 @@ class JiepiAudioProcessor : AudioProcessor {
             }
         } else {
             // 直通分支（无 Sonic / 已恢复原速原调绕开 Sonic）
+            // 归零摘链（播放线程执行，与 queueInput 串行，无 UI 线程销毁竞态）：
+            // 引擎实例存在但已不需要（needSonic false = 目标/实际均已回原速原调）→
+            // 直接 close() 销毁置 null，把"开过变速归零"彻底降级为"从没开过"，
+            // 归零后手动切歌/拖条走直通，RubberBand 残留状态不再传染刺啦爆音。
+            if (s != null) {
+                s.close()
+                sonic = null
+            }
             // 门控残留清理：变速 seek/切歌的 Sonic 静音期若尚未解除（armSonicGate 把
             // fadeTarget 压 0）就恢复原速绕开 Sonic，Sonic 恢复输出分支再也不会触发，
             // 必须在此主动 fadeIn(500) 拉回音量目标，否则 processor 永远 0 增益 →
@@ -636,15 +651,19 @@ class JiepiAudioProcessor : AudioProcessor {
     // seek 完成后再由 restoreSonic 恢复参数重新武装。
     // 思路与"按场景动态切换处理策略"一致：不需要变速处理的阶段直接让处理链直通。
     fun suspendSonic() {
-        val s = sonic ?: return
+        // 官方标准做法（对照 Media3 SonicAudioProcessor.flush）：归零/摘链时销毁重建引擎实例，
+        // 彻底清掉 RubberBand 内部状态（基音周期跟踪/相位累积/块式窗口残留），而不是仅 resetBuffers。
+        // 与"开过变速归零 == 从没开过"完全等价，从根上断掉归零后切歌/拖条的刺啦爆音传染。
+        val s = sonic
+        if (s != null) {
+            s.close()
+            sonic = null
+        }
         targetSpeed = 1f
         targetPitch = 1f
         fadeFromSpeed = 1f
         fadeFromPitch = 1f
         fadeRemaining = 0
-        s.setSpeed(1f)
-        s.setPitch(1f)
-        s.resetBuffers()
         sonicGateActive = false
         fadeInDoneNotified = false
         fadeGain = 0f
@@ -656,7 +675,13 @@ class JiepiAudioProcessor : AudioProcessor {
     // 淡入）由 armSonicGate 门控接管，硬件音量恢复由 onFadeInDone 事件驱动（PlayerManager
     // seek 完成回调不抢跑 setVolume(1f)，防把预热中段抖动瞬态轰出）。
     fun restoreSonic(speed: Float, pitch: Float) {
-        val s = sonic ?: return
+        // 官方标准做法：换源/恢复时若实例已被销毁（suspendSonic 归零摘链），直接 new 重新武装；
+        // 若实例还在则复用。重建后的引擎内部状态干净，与"从没开过变速"等价。
+        var s = sonic
+        if (s == null) {
+            s = RubberBandStream(sampleRate, channelCount)
+            sonic = s
+        }
         targetSpeed = speed.coerceIn(0.5f, 2f)
         targetPitch = pitch.coerceIn(0.5f, 2f)
         fadeFromSpeed = 1f
@@ -669,10 +694,25 @@ class JiepiAudioProcessor : AudioProcessor {
     }
 
     override fun flush() {
-        // Sonic 清缓冲但保留参数（seek/切歌不丢变速变调）；渐变直接归位目标值
-        sonic?.resetBuffers()
-        sonic?.setSpeed(targetSpeed)
-        sonic?.setPitch(targetPitch)
+        // 官方标准做法（对照 Media3 SonicAudioProcessor.flush()）：参数变化/seek/换源时
+        // 直接销毁重建引擎实例，而不是仅 resetBuffers——RubberBand 的 nativeReset 不清
+        // 基音周期跟踪/相位累积等内部状态，复用旧实例会把残留瞬态传染给新歌/新位置。
+        // 重建时按当前目标参数武装，变速变调值不丢；未开过变速（实例为 null）则保持直通。
+        val cur = sonic
+        if (cur != null) {
+            cur.close()
+            // 归零状态（目标已回原速原调）：销毁后不再重建，彻底摘链——
+            // "开过变速归零"与"从没开过"在引擎层面完全等价，切歌/seek 的
+            // RubberBand 残留状态不再传染新音源（归零后手动切歌/拖条的刺啦爆音根因）。
+            // 非归零（用户当前要变速/变调）：重建干净实例按目标参数武装，功能不丢。
+            if (targetSpeed == 1f && targetPitch == 1f) {
+                sonic = null
+            } else {
+                sonic = RubberBandStream(sampleRate, channelCount)
+                sonic?.setSpeed(targetSpeed)
+                sonic?.setPitch(targetPitch)
+            }
+        }
         fadeRemaining = 0
         // fadeGain 字段刻意不在 flush 里归 1（保留调用方现值，由 fadeOut/fadeIn 控制）：
         // 手动切歌时 fadeOut 已把 fadeGain 压到 0，若这里拉回 1，新歌 AudioTrack

@@ -388,10 +388,16 @@ object PlayerManager {
                 // EQ 滤波状态、混响尾巴、限幅平滑增益会残留灌入下一首开头。
                 // 切前显式清空 DSP（此刻 Media3 已停流，无 queueInput 并发；幂等无害）。
                 activeDsp?.flush()
+                // 自动切歌也静音垫底 + play 后淡入（resumeRestored 同款）：自然播完复用
+                // 同实例直切，新歌（尤其 MP3 开头 encoder-delay 伪影 / 续播 seek 帧边界）
+                // 若直接满音量起播，AudioTrack start 瞬态会轰出咔哒。prepare 前垫 0 保证
+                // prefill 阶段静音，play 后 150ms 淡入盖住硬件起振窗口。
+                activeDsp?.prepareFadeIn()
                 exo.setMediaItem(MediaItem.fromUri(path))
                 exo.prepare()
                 if (startPosMs > 0) exo.seekTo(startPosMs.toLong())
                 exo.play()
+                activeDsp?.fadeIn(150)
                 applyAudioFxState()
             } else if (!exo.isPlaying) {
                 // 暂停中切歌：暂停时已走"主动排空+双重验证+干净待命"（pauseDrain）——
@@ -527,7 +533,12 @@ object PlayerManager {
             targetDsp.prepareFadeIn()
         }
         // 旧歌立刻开始渐出：processor 归零后 AudioTrack 继续自然排空 buffer 里的满音量残留
-        activeDsp?.fadeOut()
+        // 手动切歌爆音修复：fadeOut 用 120ms 而非默认 25ms——25ms 对正在播放的大动态/低频
+        // 信号是激进增益调制（低频一个周期内增益骤降 → "啵/兹"调制失真），且短于 AudioTrack
+        // buffer 深度（30~50ms，部分 ROM/采样率下更深），归零后残留仍以满音量裸播一段。
+        // 120ms 平滑渐出，长于缓冲+硬件起振期，与硬件音量递减（fadeOutVolume 300ms）互补，
+        // 构成真平滑交叉，不再截断调制。
+        activeDsp?.fadeOut(120)
         // 旧歌硬件音量整体渐弱（300ms 定时递减到 0）：processor 级 fadeOut 只渐弱后续
         // 写入的数据，AudioTrack buffer 里 fade 前已写满的旧歌满音量残留会原样播完
         //（缓冲压到 30~50ms，Media3 在部分 ROM/采样率下放大到 100~300ms → 切歌后
@@ -599,7 +610,13 @@ object PlayerManager {
                     val sonicPath = dsp.isSonicActive() || speed != 1f || pitchSemitones != 0
                     if (!sonicPath) {
                         mine?.let { setFullVolume(it) }
-                        activeDsp?.fadeIn()
+                        // seek 完成淡入显式 120ms（不用默认 25ms）：渐变必须长于 AudioTrack
+                        // buffer 深度（30~50ms，部分 ROM/采样率下更深）+ 硬件起振期（30~80ms）。
+                        // 25ms 渐变在数据流层面就已爬满，硬件真正出声滞后于渐变结束 →
+                        // 起振瞬态满音量裸奔 = 拖条"刺啦"爆音。"部分歌有"正是采样率/缓冲
+                        // 深度不同导致起振期长短不同。120ms 内声音爬满，用户无感（远快于
+                        // 3~5 秒），且渐变全程覆盖硬件起振窗口，相位跳变也被平滑衔接。
+                        activeDsp?.fadeIn(120)
                     } else {
                         // 拖条踢引擎：seek 期间引擎已被 suspendSonic 踢出处理链
                         //（直通，与"未变速未变调拖条"同一路径，引擎起振瞬态无法干扰），
@@ -644,7 +661,14 @@ object PlayerManager {
                     // 的根因）。play 让硬件在静音数据（prepareFadeIn 已置 fadeGain=0）下稳定
                     // 启动后，再 500ms 长渐变接入（时长顶到最大）。
                     if (speed == 1f && pitchSemitones == 0) {
-                        pendingCrossDsp?.fadeIn(500)
+                        // 手动切歌爆音修复：fadeIn 500ms 与旧歌 fadeOutVolume 300ms 不对称——
+                        // 旧歌 300ms 已静音、新歌才爬 60%，之后 200ms 只有半音量新歌 = 切歌
+                        // 音量台阶/空窗（听感"沙沙/不连贯"）。改为 300ms 与旧歌递减完全对称：
+                        // t=0 旧满新静 → t=150ms 新旧各半 → t=300ms 旧静新满，交叉全程平滑。
+                        // 300ms 仍长于 AudioTrack buffer 深度 + 硬件起振期（30~130ms），
+                        // 起振瞬态被渐变盖住，不会裸奔。waitDrain(crossTailMs=450) 不变，
+                        // 300ms 递减完成后有 150ms 余量排空旧 buffer 残留再 stop。
+                        pendingCrossDsp?.fadeIn(300)
                     }
                     // 旧歌渐出不再在此处补 processor fadeOut(500)：READY 时旧 DSP 已由
                     // crossfadeTo 的 25ms fadeOut 归零，增益≈0，再 fadeOut 500 实际无效。
@@ -1009,6 +1033,19 @@ object PlayerManager {
         notifyPlaybackChanged()
     }
 
+    // 队列新增一首（回收站恢复歌曲时调用）：对称 removeSongFromQueue，五数组同步 append 到队尾。
+    // 加队尾不影响正在播的当前曲；播完当前歌后能自然切到它，解决"恢复后队列不更新、播完不切下一首"。
+    // 已存在则跳过（去重）；id3Title 传显示名（无 ID3 时回退），dir 为空串待扫描后由 pushToPlayer 补齐。
+    fun addSongToQueue(path: String, name: String, dir: String, id3Title: String?, id3Artist: String?) {
+        if (songPaths.contains(path)) return
+        songNames.add(name)
+        songPaths.add(path)
+        songDirs.add(dir)
+        id3Titles.add(id3Title ?: name)
+        id3Artists.add(id3Artist ?: "")
+        notifyPlaybackChanged()
+    }
+
     // 队列被整体替换（pushToPlayer/扫描/删除）后，按"当前实际播放的媒体 path"重定位 currentIndex：
     // - 当前播放的歌仍在队列 → 精确指到它（避免下标前移导致的 UI 与实播错位）
     // - 已不在队列（被删/外部文件消失）→ 指向新数组原位置（= 原下一首）；越界则收尾；队列空则 -1
@@ -1023,6 +1060,8 @@ object PlayerManager {
         }
         if (songPaths.isEmpty()) {
             currentIndex = -1
+            // 队列空了（正在播的歌被删 / 所属文件夹被删）：停掉播放器，不能让"已不存在的歌"继续放
+            if (activePlayer != null) pause()
             return
         }
         if (currentIndex >= songPaths.size) currentIndex = songPaths.size - 1
