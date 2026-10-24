@@ -11,7 +11,7 @@
     <LinearLayout
         android:id="@+id/category_bar"
         android:layout_width="match_parent"
-        android:layout_height="72dp"
+        android:layout_height="60dp"
         android:orientation="horizontal"
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintStart_toStartOf="parent"
@@ -30,8 +30,8 @@
 
             <ImageView
                 android:id="@+id/icon_song"
-                android:layout_width="26dp"
-                android:layout_height="26dp"
+                android:layout_width="24dp"
+                android:layout_height="24dp"
                 android:src="@drawable/ic_music_music"
                 android:scaleType="center"
                 android:tint="#888888"
@@ -41,7 +41,7 @@
                 android:id="@+id/cat_song"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
+                android:layout_marginTop="2dp"
                 android:text="歌曲"
                 android:textColor="#888888"
                 android:textSize="14sp" />
@@ -60,8 +60,8 @@
 
             <ImageView
                 android:id="@+id/icon_playlist"
-                android:layout_width="26dp"
-                android:layout_height="26dp"
+                android:layout_width="24dp"
+                android:layout_height="24dp"
                 android:src="@drawable/ic_music_playlist"
                 android:scaleType="center"
                 android:tint="#888888"
@@ -71,7 +71,7 @@
                 android:id="@+id/cat_playlist"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
+                android:layout_marginTop="2dp"
                 android:text="歌单"
                 android:textColor="#888888"
                 android:textSize="14sp" />
@@ -90,8 +90,8 @@
 
             <ImageView
                 android:id="@+id/icon_folder"
-                android:layout_width="26dp"
-                android:layout_height="26dp"
+                android:layout_width="24dp"
+                android:layout_height="24dp"
                 android:src="@drawable/ic_music_folder"
                 android:scaleType="center"
                 android:tint="#888888"
@@ -101,7 +101,7 @@
                 android:id="@+id/cat_folder"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
+                android:layout_marginTop="2dp"
                 android:text="文件夹"
                 android:textColor="#888888"
                 android:textSize="14sp" />

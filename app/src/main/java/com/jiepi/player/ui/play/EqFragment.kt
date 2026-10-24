@@ -85,6 +85,7 @@ class EqFragment : Fragment() {
         for (i in 0 until 10) {
             val seek = binding.root.findViewById<NeonSlider>(bandSeekIds[i])
             val valTv = binding.root.findViewById<TextView>(bandValIds[i])
+            seek.vertical = true
             // 打开 EQ 页时恢复当前设置（全局保存，切歌不丢）
             val initDb = PlayerManager.eqBandLevels[i]
             seek.progress = (initDb * 2 + 24).roundToInt().coerceIn(0, 48)

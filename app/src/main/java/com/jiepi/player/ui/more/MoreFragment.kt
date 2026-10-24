@@ -70,7 +70,7 @@ class MoreFragment : Fragment() {
             container.addView(
                 view,
                 LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                    if (withTopMargin) topMargin = MoreUi.dp(ctx, 18)
+                    if (withTopMargin) topMargin = MoreUi.dp(ctx, 8)
                 }
             )
         }

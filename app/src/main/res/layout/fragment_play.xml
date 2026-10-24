@@ -10,7 +10,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:paddingTop="12dp">
+        android:paddingTop="8dp">
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -131,13 +131,13 @@
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:paddingTop="12dp"
-        android:paddingBottom="4dp">
+        android:paddingTop="8dp"
+        android:paddingBottom="0dp">
 
         <ImageView
             android:id="@+id/btn_speed"
             android:layout_width="0dp"
-            android:layout_height="56dp"
+            android:layout_height="52dp"
             android:layout_weight="1"
             android:padding="12dp"
             android:src="@drawable/ic_play_speed"
@@ -147,7 +147,7 @@
         <ImageView
             android:id="@+id/btn_pitch"
             android:layout_width="0dp"
-            android:layout_height="56dp"
+            android:layout_height="52dp"
             android:layout_weight="1"
             android:padding="12dp"
             android:src="@drawable/ic_play_pitch"
@@ -157,7 +157,7 @@
         <ImageView
             android:id="@+id/btn_equalizer"
             android:layout_width="0dp"
-            android:layout_height="56dp"
+            android:layout_height="52dp"
             android:layout_weight="1"
             android:padding="12dp"
             android:src="@drawable/ic_play_equalizer"
@@ -167,7 +167,7 @@
         <ImageView
             android:id="@+id/btn_timer"
             android:layout_width="0dp"
-            android:layout_height="56dp"
+            android:layout_height="52dp"
             android:layout_weight="1"
             android:padding="12dp"
             android:src="@drawable/ic_play_timer"
@@ -177,7 +177,7 @@
         <ImageView
             android:id="@+id/btn_loop"
             android:layout_width="0dp"
-            android:layout_height="56dp"
+            android:layout_height="52dp"
             android:layout_weight="1"
             android:padding="12dp"
             android:src="@drawable/ic_play_repeat"
@@ -194,7 +194,7 @@
         android:gravity="center_vertical"
         android:paddingStart="16dp"
         android:paddingEnd="16dp"
-        android:paddingTop="8dp">
+        android:paddingTop="6dp">
 
         <TextView
             android:id="@+id/time_current"
@@ -228,8 +228,8 @@
         android:layout_height="wrap_content"
         android:gravity="center"
         android:orientation="horizontal"
-        android:paddingTop="16dp"
-        android:paddingBottom="48dp">
+        android:paddingTop="12dp"
+        android:paddingBottom="40dp">
 
         <ImageView
             android:id="@+id/btn_previous"

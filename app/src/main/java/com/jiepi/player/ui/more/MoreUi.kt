@@ -80,7 +80,7 @@ object MoreUi {
                 })
             }
             foreground = RippleDrawable(ColorStateList.valueOf(0x22FFFFFF.toInt()), null, null)
-            setPadding(dp(context, 18), dp(context, 14), dp(context, 18), dp(context, 14))
+            setPadding(dp(context, 16), dp(context, 8), dp(context, 16), dp(context, 8))
             setOnClickListener { onClick() }
 
             val textBox = LinearLayout(context).apply {

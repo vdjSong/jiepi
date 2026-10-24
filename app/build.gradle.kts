@@ -27,11 +27,10 @@ android {
         applicationId = "com.jiepi.player"
         minSdk = 34
         targetSdk = 36
-        versionCode = 5
-        versionName = "1.1.4"
-        // 仅打包 arm64-v8a 的 librubberband.so
+        versionCode = 6
+        versionName = "1.1.5"
         ndk {
-            abiFilters += listOf("arm64-v8a")
+            abiFilters += listOf("arm64-v8a", "x86_64")
         }
         externalNativeBuild {
             cmake {

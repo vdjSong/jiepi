@@ -46,6 +46,8 @@ class PlaybackService : Service() {
         private const val ACTION_PLAY_PAUSE = "com.jiepi.player.action.PLAY_PAUSE"
         private const val ACTION_NEXT = "com.jiepi.player.action.NEXT"
         private const val ACTION_PREVIOUS = "com.jiepi.player.action.PREVIOUS"
+        const val ACTION_SEEK = "com.jiepi.player.action.SEEK"
+        const val EXTRA_POSITION = "com.jiepi.player.extra.POSITION"
     }
 
     private var mediaSession: MediaSession? = null
@@ -102,6 +104,11 @@ class PlaybackService : Service() {
             }
             ACTION_PREVIOUS -> {
                 PlayerManager.previous(this)
+                return START_STICKY
+            }
+            ACTION_SEEK -> {
+                val pos = intent?.getIntExtra(EXTRA_POSITION, -1) ?: -1
+                if (pos >= 0) PlayerManager.seekTo(pos)
                 return START_STICKY
             }
         }
@@ -162,7 +169,7 @@ class PlaybackService : Service() {
         val artist = PlayerManager.currentArtist().ifBlank { "未在播放" }
         val playing = PlayerManager.activePlayer?.isPlaying == true
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_music)
+            .setSmallIcon(R.drawable.ic_logo_baiselogo)
             .setContentTitle(title)
             .setContentText(artist)
             .setContentIntent(sessionActivity!!)
@@ -173,7 +180,8 @@ class PlaybackService : Service() {
             .setColor(0xFF000000.toInt())
             .setColorized(true)
             .setStyle(
-                androidx.core.app.NotificationCompat.DecoratedCustomViewStyle()
+                androidx.media.app.NotificationCompat.DecoratedMediaCustomViewStyle()
+                    .setMediaSession(mediaSession!!.sessionCompatToken)
             )
             .setCustomContentView(buildCollapsedViews(playing))
             .setCustomBigContentView(buildExpandedViews(playing))
@@ -188,19 +196,17 @@ class PlaybackService : Service() {
 
     private fun buildExpandedViews(playing: Boolean): RemoteViews {
         val v = RemoteViews(packageName, R.layout.notification_player_expanded)
+        v.setString(R.id.np_slider, "setSeekServiceAction", ACTION_SEEK)
         bindControls(v, playing)
         val exo = PlayerManager.activePlayer
         val duration = exo?.duration?.takeIf { it != C.TIME_UNSET && it > 0 } ?: 0L
         val position = (exo?.currentPosition ?: 0L).coerceIn(0L, duration)
         if (duration > 0L) {
-            v.setProgressBar(
-                R.id.np_progress,
-                duration.toInt().coerceAtLeast(1),
-                position.toInt().coerceIn(0, duration.toInt()),
-                false
-            )
+            v.setInt(R.id.np_slider, "setMax", duration.toInt().coerceAtLeast(1))
+            v.setInt(R.id.np_slider, "setProgress", position.toInt().coerceIn(0, duration.toInt()))
         } else {
-            v.setProgressBar(R.id.np_progress, 100, 0, true)
+            v.setInt(R.id.np_slider, "setMax", 100)
+            v.setInt(R.id.np_slider, "setProgress", 0)
         }
         return v
     }
@@ -279,8 +285,18 @@ class CarPlayerProxy(context: Context) : SimpleBasePlayer(context.mainLooper) {
             .setContentBufferedPositionMs(SimpleBasePlayer.PositionSupplier.getConstant((exo?.bufferedPosition ?: 0L).coerceAtLeast(0L)))
             .setTotalBufferedDurationMs(SimpleBasePlayer.PositionSupplier.getConstant(exo?.totalBufferedDuration ?: 0L))
 
+        val currentMetadata = if (hasMedia) {
+            val d = exo?.duration ?: C.TIME_UNSET
+            MediaMetadata.Builder()
+                .setTitle(PlayerManager.currentDisplayName())
+                .setArtist(PlayerManager.currentArtist().ifBlank { null })
+                .setDurationMs(if (d == C.TIME_UNSET || d <= 0) null else d)
+                .build()
+        } else {
+            MediaMetadata.EMPTY
+        }
         if (hasMedia) {
-            builder.setPlaylist(SongsTimeline(PlayerManager.songPaths.toList()), Tracks.EMPTY, MediaMetadata.EMPTY)
+            builder.setPlaylist(SongsTimeline(PlayerManager.songPaths.toList()), Tracks.EMPTY, currentMetadata)
                 .setCurrentMediaItemIndex(idx)
         } else {
             builder.setPlaylist(Timeline.EMPTY, Tracks.EMPTY, MediaMetadata.EMPTY)
@@ -342,8 +358,8 @@ private class SongsTimeline(private val paths: List<String>) : Timeline() {
         val item = mediaItemFor(index, path)
         val durationUs = if (index == PlayerManager.currentIndex) currentDurationUs() else C.TIME_UNSET
         window.set(
-            Window.SINGLE_WINDOW_UID, item, item.mediaId,
-            0L, 0L, 0L, false, false, null, 0L, durationUs, 0, 0, durationUs
+            Window.SINGLE_WINDOW_UID, item, null,
+            0L, 0L, 0L, false, false, null, 0L, durationUs, 0, 0, 0L
         )
         return window
     }

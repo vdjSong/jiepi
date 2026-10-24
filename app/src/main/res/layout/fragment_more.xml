@@ -14,7 +14,7 @@
         android:paddingLeft="20dp"
         android:paddingRight="20dp"
         android:paddingTop="44dp"
-        android:paddingBottom="48dp">
+        android:paddingBottom="96dp">
 
         <ImageView
             android:id="@+id/img_more_logo"

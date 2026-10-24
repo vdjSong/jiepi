@@ -1,6 +1,7 @@
 package com.jiepi.player.ui
 
 import android.content.Context
+import android.content.Intent
 import android.graphics.Canvas
 import android.graphics.LinearGradient
 import android.graphics.Paint
@@ -9,6 +10,7 @@ import android.graphics.Shader
 import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
+import com.jiepi.player.PlaybackService
 import kotlin.math.roundToInt
 
 /**
@@ -33,6 +35,10 @@ class NeonSlider @JvmOverloads constructor(
     }
 
     var listener: OnProgressChangeListener? = null
+
+    var vertical: Boolean = false
+
+    var seekServiceAction: String? = null
 
     fun setOnProgressChangeListener(l: OnProgressChangeListener?) {
         listener = l
@@ -100,6 +106,10 @@ class NeonSlider @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        if (vertical) {
+            drawVertical(canvas)
+            return
+        }
         val trackH = dp(4f)
         val trackTop = (height - trackH) / 2f
 
@@ -166,23 +176,85 @@ class NeonSlider @JvmOverloads constructor(
         )
     }
 
+    private fun drawVertical(canvas: Canvas) {
+        val trackW = dp(4f)
+        val trackLeft = (width - trackW) / 2f
+        trackPaint.style = Paint.Style.FILL
+        trackPaint.color = 0xFF3A3A3C.toInt()
+        trackRect.set(trackLeft, 0f, trackLeft + trackW, height.toFloat())
+        canvas.drawRoundRect(trackRect, trackW / 2f, trackW / 2f, trackPaint)
+
+        if (progress > 0 && max > 0) {
+            val thumbH = dp(if (isDragging) 26f else 24f)
+            val usable = height - thumbH
+            val fillTop = height - (thumbH / 2f + usable * progress / max)
+            if (fillTop < height) {
+                fillPaint.shader = LinearGradient(
+                    0f, height.toFloat(), 0f, fillTop,
+                    0xFF38BDF8.toInt(), 0xFFC084FC.toInt(),
+                    Shader.TileMode.CLAMP
+                )
+                canvas.drawRoundRect(
+                    RectF(trackLeft, fillTop, trackLeft + trackW, height.toFloat()),
+                    trackW / 2f, trackW / 2f, fillPaint
+                )
+                fillPaint.shader = null
+            }
+        }
+
+        val thumbH = dp(if (isDragging) 26f else 24f)
+        val thumbW = dp(if (isDragging) 22f else 20f)
+        val cy = if (max > 0) {
+            val usable = height - thumbH
+            height - (thumbH / 2f + usable * progress / max)
+        } else height - thumbH / 2f
+        val cx = width / 2f
+        val left = cx - thumbW / 2f
+        val top = cy - thumbH / 2f
+        val right = cx + thumbW / 2f
+        val bottom = cy + thumbH / 2f
+
+        val glowPad = dp(4f)
+        glowPaint.style = Paint.Style.FILL
+        glowPaint.color = if (isDragging) 0x5538BDF8.toInt() else 0x2638BDF8.toInt()
+        canvas.drawRoundRect(
+            RectF(left - glowPad, top - glowPad, right + glowPad, bottom + glowPad),
+            thumbH / 2f + glowPad, thumbH / 2f + glowPad, glowPaint
+        )
+
+        thumbPaint.style = Paint.Style.FILL
+        thumbPaint.color = 0xFFF5F5F5.toInt()
+        canvas.drawRoundRect(RectF(left, top, right, bottom), thumbH / 2f, thumbH / 2f, thumbPaint)
+
+        thumbStrokePaint.style = Paint.Style.STROKE
+        thumbStrokePaint.strokeWidth = dp(1.5f)
+        thumbStrokePaint.color = 0xFF38BDF8.toInt()
+        canvas.drawRoundRect(RectF(left, top, right, bottom), thumbH / 2f, thumbH / 2f, thumbStrokePaint)
+    }
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 isDragging = true
                 listener?.onStartTrackingTouch(this)
-                updateProgress(event.x)
+                if (vertical) updateProgressVertical(event.y) else updateProgress(event.x)
                 parent?.requestDisallowInterceptTouchEvent(true)
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
-                updateProgress(event.x)
+                if (vertical) updateProgressVertical(event.y) else updateProgress(event.x)
                 return true
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 isDragging = false
                 invalidate()
                 listener?.onStopTrackingTouch(this)
+                if (seekServiceAction != null) {
+                    val i = Intent(context, PlaybackService::class.java)
+                        .setAction(seekServiceAction)
+                        .putExtra(PlaybackService.EXTRA_POSITION, progress)
+                    runCatching { context.startService(i) }
+                }
                 parent?.requestDisallowInterceptTouchEvent(false)
                 return true
             }
@@ -193,6 +265,16 @@ class NeonSlider @JvmOverloads constructor(
     private fun updateProgress(x: Float) {
         if (max <= 0 || width <= 0) return
         val fraction = (x / width).coerceIn(0f, 1f)
+        val newProgress = (fraction * max).roundToInt().coerceIn(0, max)
+        if (newProgress != progress) {
+            progress = newProgress
+            listener?.onProgressChanged(this, newProgress, true)
+        }
+    }
+
+    private fun updateProgressVertical(y: Float) {
+        if (max <= 0 || height <= 0) return
+        val fraction = ((height - y) / height).coerceIn(0f, 1f)
         val newProgress = (fraction * max).roundToInt().coerceIn(0, max)
         if (newProgress != progress) {
             progress = newProgress

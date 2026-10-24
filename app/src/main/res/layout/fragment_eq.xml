@@ -1,17 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#000000"
-    android:orientation="vertical">
+    android:background="#000000">
 
     <!-- 顶栏：返回 + 标题 -->
     <LinearLayout
-        android:layout_width="match_parent"
+        android:id="@+id/eq_top_bar"
+        android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:paddingTop="12dp">
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent">
 
         <ImageView
             android:id="@+id/btn_eq_back"
@@ -34,48 +37,61 @@
             android:textStyle="bold" />
     </LinearLayout>
 
-    <!-- 曲线窗口：固定一屏完整显示 10 个频段线条，不随频段区滚动 -->
     <com.jiepi.player.ui.play.EqCurveView
         android:id="@+id/eq_curve"
-        android:layout_width="match_parent"
-        android:layout_height="120dp"
-        android:layout_marginTop="6dp" />
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        app:layout_constraintHeight_default="spread"
+        app:layout_constraintHeight_max="96dp"
+        app:layout_constraintHeight_min="56dp"
+        app:layout_constraintBottom_toTopOf="@id/eq_scroll_frame"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/eq_top_bar" />
 
     <!-- 滑动块：控制下方十频段调节区左右移动；外圈圆角长条框定位轨道（系统轨道色不可见），轨道贴框上半部不挡下方文字 -->
     <FrameLayout
-        android:layout_width="match_parent"
-        android:layout_height="28dp"
+        android:id="@+id/eq_scroll_frame"
+        android:layout_width="0dp"
+        android:layout_height="20dp"
         android:layout_marginStart="16dp"
         android:layout_marginEnd="16dp"
-        android:layout_marginTop="2dp">
+        android:layout_marginTop="4dp"
+        app:layout_constraintBottom_toTopOf="@id/eq_bands_viewport"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/eq_curve">
 
         <com.jiepi.player.ui.NeonSlider
             android:id="@+id/eq_scroll_seek"
             android:layout_width="match_parent"
-            android:layout_height="24dp"
+            android:layout_height="20dp"
             android:layout_gravity="center_vertical"
             android:max="100"
             android:progress="0" />
     </FrameLayout>
 
-    <!-- 十频段调节区：裁剪视口内整体平移，仅由上方滑动块控制左右（本身不可横滑） -->
     <FrameLayout
         android:id="@+id/eq_bands_viewport"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
+        android:layout_width="0dp"
+        android:layout_height="160dp"
         android:clipChildren="true"
-        android:clipToPadding="false">
+        android:clipToPadding="false"
+        app:layout_constraintBottom_toTopOf="@id/eq_effects_area"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/eq_scroll_frame">
 
         <LinearLayout
             android:id="@+id/eq_bands_content"
             android:layout_width="700dp"
-            android:layout_height="wrap_content"
+            android:layout_height="match_parent"
             android:orientation="horizontal">
 
                 <!-- 32 -->
                 <LinearLayout
                     android:layout_width="70dp"
-                    android:layout_height="wrap_content"
+                    android:layout_height="match_parent"
                     android:gravity="center_horizontal"
                     android:orientation="vertical">
 
@@ -83,29 +99,23 @@
                         android:id="@+id/eq_val_1"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="6dp"
+                        android:layout_marginTop="0dp"
                         android:text="0"
                         android:textColor="#CCCCCC"
                         android:textSize="13sp" />
 
-                    <FrameLayout
+                    <com.jiepi.player.ui.NeonSlider
+                        android:id="@+id/eq_band_1"
                         android:layout_width="70dp"
-                        android:layout_height="150dp">
-
-                        <com.jiepi.player.ui.NeonSlider
-                            android:id="@+id/eq_band_1"
-                            android:layout_width="150dp"
-                            android:layout_height="70dp"
-                            android:layout_gravity="center"
-                            android:max="48"
-                            android:progress="24"
-                            android:rotation="270" />
-                    </FrameLayout>
+                        android:layout_height="0dp"
+                        android:layout_weight="1"
+                        android:max="48"
+                        android:progress="24" />
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="2dp"
+                        android:layout_marginTop="0dp"
                         android:text="32"
                         android:textColor="#888888"
                         android:textSize="13sp" />
@@ -114,7 +124,7 @@
                 <!-- 64 -->
                 <LinearLayout
                     android:layout_width="70dp"
-                    android:layout_height="wrap_content"
+                    android:layout_height="match_parent"
                     android:gravity="center_horizontal"
                     android:orientation="vertical">
 
@@ -122,29 +132,23 @@
                         android:id="@+id/eq_val_2"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="6dp"
+                        android:layout_marginTop="0dp"
                         android:text="0"
                         android:textColor="#CCCCCC"
                         android:textSize="13sp" />
 
-                    <FrameLayout
+                    <com.jiepi.player.ui.NeonSlider
+                        android:id="@+id/eq_band_2"
                         android:layout_width="70dp"
-                        android:layout_height="150dp">
-
-                        <com.jiepi.player.ui.NeonSlider
-                            android:id="@+id/eq_band_2"
-                            android:layout_width="150dp"
-                            android:layout_height="70dp"
-                            android:layout_gravity="center"
-                            android:max="48"
-                            android:progress="24"
-                            android:rotation="270" />
-                    </FrameLayout>
+                        android:layout_height="0dp"
+                        android:layout_weight="1"
+                        android:max="48"
+                        android:progress="24" />
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="2dp"
+                        android:layout_marginTop="0dp"
                         android:text="64"
                         android:textColor="#888888"
                         android:textSize="13sp" />
@@ -153,7 +157,7 @@
                 <!-- 125 -->
                 <LinearLayout
                     android:layout_width="70dp"
-                    android:layout_height="wrap_content"
+                    android:layout_height="match_parent"
                     android:gravity="center_horizontal"
                     android:orientation="vertical">
 
@@ -161,29 +165,23 @@
                         android:id="@+id/eq_val_3"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="6dp"
+                        android:layout_marginTop="0dp"
                         android:text="0"
                         android:textColor="#CCCCCC"
                         android:textSize="13sp" />
 
-                    <FrameLayout
+                    <com.jiepi.player.ui.NeonSlider
+                        android:id="@+id/eq_band_3"
                         android:layout_width="70dp"
-                        android:layout_height="150dp">
-
-                        <com.jiepi.player.ui.NeonSlider
-                            android:id="@+id/eq_band_3"
-                            android:layout_width="150dp"
-                            android:layout_height="70dp"
-                            android:layout_gravity="center"
-                            android:max="48"
-                            android:progress="24"
-                            android:rotation="270" />
-                    </FrameLayout>
+                        android:layout_height="0dp"
+                        android:layout_weight="1"
+                        android:max="48"
+                        android:progress="24" />
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="2dp"
+                        android:layout_marginTop="0dp"
                         android:text="125"
                         android:textColor="#888888"
                         android:textSize="13sp" />
@@ -192,7 +190,7 @@
                 <!-- 250 -->
                 <LinearLayout
                     android:layout_width="70dp"
-                    android:layout_height="wrap_content"
+                    android:layout_height="match_parent"
                     android:gravity="center_horizontal"
                     android:orientation="vertical">
 
@@ -200,29 +198,23 @@
                         android:id="@+id/eq_val_4"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="6dp"
+                        android:layout_marginTop="0dp"
                         android:text="0"
                         android:textColor="#CCCCCC"
                         android:textSize="13sp" />
 
-                    <FrameLayout
+                    <com.jiepi.player.ui.NeonSlider
+                        android:id="@+id/eq_band_4"
                         android:layout_width="70dp"
-                        android:layout_height="150dp">
-
-                        <com.jiepi.player.ui.NeonSlider
-                            android:id="@+id/eq_band_4"
-                            android:layout_width="150dp"
-                            android:layout_height="70dp"
-                            android:layout_gravity="center"
-                            android:max="48"
-                            android:progress="24"
-                            android:rotation="270" />
-                    </FrameLayout>
+                        android:layout_height="0dp"
+                        android:layout_weight="1"
+                        android:max="48"
+                        android:progress="24" />
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="2dp"
+                        android:layout_marginTop="0dp"
                         android:text="250"
                         android:textColor="#888888"
                         android:textSize="13sp" />
@@ -231,7 +223,7 @@
                 <!-- 500 -->
                 <LinearLayout
                     android:layout_width="70dp"
-                    android:layout_height="wrap_content"
+                    android:layout_height="match_parent"
                     android:gravity="center_horizontal"
                     android:orientation="vertical">
 
@@ -239,29 +231,23 @@
                         android:id="@+id/eq_val_5"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="6dp"
+                        android:layout_marginTop="0dp"
                         android:text="0"
                         android:textColor="#CCCCCC"
                         android:textSize="13sp" />
 
-                    <FrameLayout
+                    <com.jiepi.player.ui.NeonSlider
+                        android:id="@+id/eq_band_5"
                         android:layout_width="70dp"
-                        android:layout_height="150dp">
-
-                        <com.jiepi.player.ui.NeonSlider
-                            android:id="@+id/eq_band_5"
-                            android:layout_width="150dp"
-                            android:layout_height="70dp"
-                            android:layout_gravity="center"
-                            android:max="48"
-                            android:progress="24"
-                            android:rotation="270" />
-                    </FrameLayout>
+                        android:layout_height="0dp"
+                        android:layout_weight="1"
+                        android:max="48"
+                        android:progress="24" />
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="2dp"
+                        android:layout_marginTop="0dp"
                         android:text="500"
                         android:textColor="#888888"
                         android:textSize="13sp" />
@@ -270,7 +256,7 @@
                 <!-- 1K -->
                 <LinearLayout
                     android:layout_width="70dp"
-                    android:layout_height="wrap_content"
+                    android:layout_height="match_parent"
                     android:gravity="center_horizontal"
                     android:orientation="vertical">
 
@@ -278,29 +264,23 @@
                         android:id="@+id/eq_val_6"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="6dp"
+                        android:layout_marginTop="0dp"
                         android:text="0"
                         android:textColor="#CCCCCC"
                         android:textSize="13sp" />
 
-                    <FrameLayout
+                    <com.jiepi.player.ui.NeonSlider
+                        android:id="@+id/eq_band_6"
                         android:layout_width="70dp"
-                        android:layout_height="150dp">
-
-                        <com.jiepi.player.ui.NeonSlider
-                            android:id="@+id/eq_band_6"
-                            android:layout_width="150dp"
-                            android:layout_height="70dp"
-                            android:layout_gravity="center"
-                            android:max="48"
-                            android:progress="24"
-                            android:rotation="270" />
-                    </FrameLayout>
+                        android:layout_height="0dp"
+                        android:layout_weight="1"
+                        android:max="48"
+                        android:progress="24" />
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="2dp"
+                        android:layout_marginTop="0dp"
                         android:text="1K"
                         android:textColor="#888888"
                         android:textSize="13sp" />
@@ -309,7 +289,7 @@
                 <!-- 2K -->
                 <LinearLayout
                     android:layout_width="70dp"
-                    android:layout_height="wrap_content"
+                    android:layout_height="match_parent"
                     android:gravity="center_horizontal"
                     android:orientation="vertical">
 
@@ -317,29 +297,23 @@
                         android:id="@+id/eq_val_7"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="6dp"
+                        android:layout_marginTop="0dp"
                         android:text="0"
                         android:textColor="#CCCCCC"
                         android:textSize="13sp" />
 
-                    <FrameLayout
+                    <com.jiepi.player.ui.NeonSlider
+                        android:id="@+id/eq_band_7"
                         android:layout_width="70dp"
-                        android:layout_height="150dp">
-
-                        <com.jiepi.player.ui.NeonSlider
-                            android:id="@+id/eq_band_7"
-                            android:layout_width="150dp"
-                            android:layout_height="70dp"
-                            android:layout_gravity="center"
-                            android:max="48"
-                            android:progress="24"
-                            android:rotation="270" />
-                    </FrameLayout>
+                        android:layout_height="0dp"
+                        android:layout_weight="1"
+                        android:max="48"
+                        android:progress="24" />
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="2dp"
+                        android:layout_marginTop="0dp"
                         android:text="2K"
                         android:textColor="#888888"
                         android:textSize="13sp" />
@@ -348,7 +322,7 @@
                 <!-- 4K -->
                 <LinearLayout
                     android:layout_width="70dp"
-                    android:layout_height="wrap_content"
+                    android:layout_height="match_parent"
                     android:gravity="center_horizontal"
                     android:orientation="vertical">
 
@@ -356,29 +330,23 @@
                         android:id="@+id/eq_val_8"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="6dp"
+                        android:layout_marginTop="0dp"
                         android:text="0"
                         android:textColor="#CCCCCC"
                         android:textSize="13sp" />
 
-                    <FrameLayout
+                    <com.jiepi.player.ui.NeonSlider
+                        android:id="@+id/eq_band_8"
                         android:layout_width="70dp"
-                        android:layout_height="150dp">
-
-                        <com.jiepi.player.ui.NeonSlider
-                            android:id="@+id/eq_band_8"
-                            android:layout_width="150dp"
-                            android:layout_height="70dp"
-                            android:layout_gravity="center"
-                            android:max="48"
-                            android:progress="24"
-                            android:rotation="270" />
-                    </FrameLayout>
+                        android:layout_height="0dp"
+                        android:layout_weight="1"
+                        android:max="48"
+                        android:progress="24" />
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="2dp"
+                        android:layout_marginTop="0dp"
                         android:text="4K"
                         android:textColor="#888888"
                         android:textSize="13sp" />
@@ -387,7 +355,7 @@
                 <!-- 8K -->
                 <LinearLayout
                     android:layout_width="70dp"
-                    android:layout_height="wrap_content"
+                    android:layout_height="match_parent"
                     android:gravity="center_horizontal"
                     android:orientation="vertical">
 
@@ -395,29 +363,23 @@
                         android:id="@+id/eq_val_9"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="6dp"
+                        android:layout_marginTop="0dp"
                         android:text="0"
                         android:textColor="#CCCCCC"
                         android:textSize="13sp" />
 
-                    <FrameLayout
+                    <com.jiepi.player.ui.NeonSlider
+                        android:id="@+id/eq_band_9"
                         android:layout_width="70dp"
-                        android:layout_height="150dp">
-
-                        <com.jiepi.player.ui.NeonSlider
-                            android:id="@+id/eq_band_9"
-                            android:layout_width="150dp"
-                            android:layout_height="70dp"
-                            android:layout_gravity="center"
-                            android:max="48"
-                            android:progress="24"
-                            android:rotation="270" />
-                    </FrameLayout>
+                        android:layout_height="0dp"
+                        android:layout_weight="1"
+                        android:max="48"
+                        android:progress="24" />
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="2dp"
+                        android:layout_marginTop="0dp"
                         android:text="8K"
                         android:textColor="#888888"
                         android:textSize="13sp" />
@@ -426,7 +388,7 @@
                 <!-- 16K -->
                 <LinearLayout
                     android:layout_width="70dp"
-                    android:layout_height="wrap_content"
+                    android:layout_height="match_parent"
                     android:gravity="center_horizontal"
                     android:orientation="vertical">
 
@@ -434,29 +396,23 @@
                         android:id="@+id/eq_val_10"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="6dp"
+                        android:layout_marginTop="0dp"
                         android:text="0"
                         android:textColor="#CCCCCC"
                         android:textSize="13sp" />
 
-                    <FrameLayout
+                    <com.jiepi.player.ui.NeonSlider
+                        android:id="@+id/eq_band_10"
                         android:layout_width="70dp"
-                        android:layout_height="150dp">
-
-                        <com.jiepi.player.ui.NeonSlider
-                            android:id="@+id/eq_band_10"
-                            android:layout_width="150dp"
-                            android:layout_height="70dp"
-                            android:layout_gravity="center"
-                            android:max="48"
-                            android:progress="24"
-                            android:rotation="270" />
-                    </FrameLayout>
+                        android:layout_height="0dp"
+                        android:layout_weight="1"
+                        android:max="48"
+                        android:progress="24" />
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="2dp"
+                        android:layout_marginTop="0dp"
                         android:text="16K"
                         android:textColor="#888888"
                         android:textSize="13sp" />
@@ -466,17 +422,23 @@
 
     <!-- 音效调节：6 个效果滑动条统一规格（名称/滑条/百分比同列对齐） -->
     <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
+        android:id="@+id/eq_effects_area"
+        android:layout_width="0dp"
+        android:layout_height="264dp"
         android:orientation="vertical"
-        android:paddingStart="20dp"
-        android:paddingEnd="20dp"
-        android:paddingTop="6dp">
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:paddingTop="0dp"
+        app:layout_constraintBottom_toTopOf="@id/eq_bottom_spacer"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/eq_bands_viewport">
 
         <!-- 动态推进 -->
         <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="40dp"
+            android:layout_height="0dp"
+            android:layout_weight="1"
             android:gravity="center_vertical"
             android:orientation="horizontal">
 
@@ -512,7 +474,8 @@
         <!-- 高保真 -->
         <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="40dp"
+            android:layout_height="0dp"
+            android:layout_weight="1"
             android:gravity="center_vertical"
             android:orientation="horizontal">
 
@@ -548,7 +511,8 @@
         <!-- 高音加强 -->
         <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="40dp"
+            android:layout_height="0dp"
+            android:layout_weight="1"
             android:gravity="center_vertical"
             android:orientation="horizontal">
 
@@ -584,7 +548,8 @@
         <!-- 低音加强 -->
         <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="40dp"
+            android:layout_height="0dp"
+            android:layout_weight="1"
             android:gravity="center_vertical"
             android:orientation="horizontal">
 
@@ -620,7 +585,8 @@
         <!-- 环绕 -->
         <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="40dp"
+            android:layout_height="0dp"
+            android:layout_weight="1"
             android:gravity="center_vertical"
             android:orientation="horizontal">
 
@@ -656,7 +622,8 @@
         <!-- 混响 -->
         <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="40dp"
+            android:layout_height="0dp"
+            android:layout_weight="1"
             android:gravity="center_vertical"
             android:orientation="horizontal">
 
@@ -690,6 +657,13 @@
                 android:textSize="13sp" />
         </LinearLayout>
     </LinearLayout>
-</LinearLayout>
 
-
+    <View
+        android:id="@+id/eq_bottom_spacer"
+        android:layout_width="0dp"
+        android:layout_height="20dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/eq_effects_area" />
+</androidx.constraintlayout.widget.ConstraintLayout>
