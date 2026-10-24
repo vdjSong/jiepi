@@ -339,8 +339,15 @@ class JiepiAudioProcessor : AudioProcessor {
         active = inputAudioFormat.encoding == C.ENCODING_PCM_16BIT
         // Rubber Band 按声道创建：切歌时 mono/stereo 交替必须重建，否则交错缓冲错乱。
         // 采样率变化不必重建（Rubber Band 构造时按 sampleRate 建窗），但渐变时长要按新采样率重算。
+        // 只在真正需要变速/变调（目标非原速原调）时才创建引擎——非变速用户全程不碰
+        // RubberBand，避免"configure 创建 → queueInput 直通 close"在音频线程的创建/销毁
+        // 阻塞（native 内存分配/释放数十 ms）把切歌/拖条的数据流打断出呲啦杂音。
+        // 引擎已存在且声道变化时同样要重建（交错缓冲错乱），条件与旧逻辑等价：
+        // 旧逻辑"cur==null 就建"被限定为变速态，变速态下两种分支都覆盖。
         val cur = sonic
-        if (cur == null || cur.getChannels() != channelCount) {
+        if ((targetSpeed != 1f || targetPitch != 1f) &&
+            (cur == null || cur.getChannels() != channelCount)
+        ) {
             sonic = RubberBandStream(sampleRate, channelCount)
             sonic?.setSpeed(targetSpeed)
             sonic?.setPitch(targetPitch)
