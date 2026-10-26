@@ -14,7 +14,7 @@ import kotlin.math.sin
 import kotlin.math.tanh
 
 // 应用内 DSP 音效处理器：完全绕开系统 audiofx，任何 ROM（LineageOS/国产 ROM）都生效
-// 功能链：10 段参数 EQ（双二阶 IIR 级联，含伴奏中频抑制/高音加强/高保真激励/低音加强）
+// 功能链：10 段参数 EQ（双二阶 IIR 级联，含高音加强/高保真激励/低音加强）
 //        → 混响（Schroeder 简化：16 梳状并联 + 5 全通串联，按干湿比混入）
 //        → 环绕（M/S 立体声拓宽）
 //        → 动态推进（tanh 软限幅增益）
@@ -204,7 +204,6 @@ class JiepiAudioProcessor : AudioProcessor {
 
     // 音效参数（0~100 的百分比在 setter 里归一化成 0~1）
     @Volatile private var eqLevels = FloatArray(10) // -12 ~ +12 dB
-    @Volatile private var vocalSuppress = 0f
     @Volatile private var effectDynamic = 0f
     @Volatile private var effectHifi = 0f
     @Volatile private var effectHigh = 0f
@@ -236,10 +235,9 @@ class JiepiAudioProcessor : AudioProcessor {
     }
 
     fun setEffects(
-        vocalSuppress: Int, effectDynamic: Int, effectHifi: Int,
+        effectDynamic: Int, effectHifi: Int,
         effectHigh: Int, effectLow: Int, effectSurround: Int, effectReverb: Int
     ) {
-        this.vocalSuppress = vocalSuppress / 100f
         this.effectDynamic = effectDynamic / 100f
         this.effectHifi = effectHifi / 100f
         this.effectHigh = effectHigh / 100f
@@ -262,12 +260,6 @@ class JiepiAudioProcessor : AudioProcessor {
         val finalDb = FloatArray(10)
         for (i in 0..9) {
             var db = eqLevels[i]
-            // 伴奏人声抑制：只压人声主频带，不碰 8k 以上乐器高频区。
-            // 旧写法 4~7 段一刀切，8k（镲片/弦泛音等乐器特征）也被压掉，听感就是"中频乐器被削"。
-            // 新写法：2kHz 人声主体压满，1k/4k 侧翼减半，500Hz 胸腔共鸣轻微压，8k/12k/16k 全保留。
-            if (i == 5) db -= vocalSuppress * 12f
-            if (i == 4 || i == 6) db -= vocalSuppress * 6f
-            if (i == 3) db -= vocalSuppress * 3f
             if (i in 8..9) db += effectHigh * 5.0f // 高音增强（上限 5.0dB）
             if (i >= 5) db += effectHifi * 3.0f // 超高保真激励（上限 3.0dB）
             if (i <= 2) db += effectLow * 2.6f // 低音增强（上限 2.6dB）
@@ -511,7 +503,7 @@ class JiepiAudioProcessor : AudioProcessor {
             var l = inShort[f * ch].toFloat() / 32768f
             var r = if (ch == 2) inShort[f * ch + 1].toFloat() / 32768f else l
 
-            // 1) EQ：10 段双二阶级联（含伴奏/高音/高保真/低音补偿）
+            // 1) EQ：10 段双二阶级联（含高音/高保真/低音补偿）
             l = processEq(l, 0)
             r = processEq(r, if (ch == 2) 1 else 0)
 

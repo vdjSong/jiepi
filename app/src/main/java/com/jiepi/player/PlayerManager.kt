@@ -285,7 +285,6 @@ object PlayerManager {
 
     // ========== EQ / 音效状态（全局保存，切歌不丢，杀进程也不丢） ==========
     val eqBandLevels = FloatArray(10) // -12 ~ +12 dB，0 = 不动
-    var vocalSuppress = 0 // 伴奏人声抑制 0~100
     var effectDynamic = 0 // 动态推进 0~100
     var effectHifi = 0 // 高保真 0~100
     var effectHigh = 0 // 高音加强 0~100
@@ -313,7 +312,6 @@ object PlayerManager {
                 }
             }
         } catch (_: Exception) {}
-        vocalSuppress = p.getInt("vocalSuppress", 0)
         effectDynamic = p.getInt("effectDynamic", 0)
         effectHifi = p.getInt("effectHifi", 0)
         effectHigh = p.getInt("effectHigh", 0)
@@ -329,7 +327,6 @@ object PlayerManager {
         val eqStr = eqBandLevels.joinToString(",") { "%.1f".format(it) }
         p.edit()
             .putString("eq", eqStr)
-            .putInt("vocalSuppress", vocalSuppress)
             .putInt("effectDynamic", effectDynamic)
             .putInt("effectHifi", effectHifi)
             .putInt("effectHigh", effectHigh)
@@ -1324,11 +1321,11 @@ object PlayerManager {
         dspA.setEqLevels(eqBandLevels)
         dspB.setEqLevels(eqBandLevels)
         dspA.setEffects(
-            vocalSuppress, effectDynamic, effectHifi,
+            effectDynamic, effectHifi,
             effectHigh, effectLow, effectSurround, effectReverb
         )
         dspB.setEffects(
-            vocalSuppress, effectDynamic, effectHifi,
+            effectDynamic, effectHifi,
             effectHigh, effectLow, effectSurround, effectReverb
         )
         persistFxState()

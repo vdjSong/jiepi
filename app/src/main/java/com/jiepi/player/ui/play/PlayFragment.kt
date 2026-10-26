@@ -111,10 +111,10 @@ class PlayFragment : Fragment() {
             findNavController().navigate(R.id.action_play_to_eq)
         }
 
-        // 定时关闭：点一下弹档位卡片（原更多卡片入口，直接上排）
+        // 定时关闭：点一下弹档位卡片
         binding.btnTimer.setOnClickListener { showTimerDialog() }
 
-        // 播放模式：4 个图标轮着切（原更多卡片入口，直接上排），当前显示哪个就是哪个模式
+        // 播放模式：4 个图标轮着切，当前显示哪个就是哪个模式
         val loopIcons = intArrayOf(
             R.drawable.ic_play_repeat,
             R.drawable.ic_play_repeat1,

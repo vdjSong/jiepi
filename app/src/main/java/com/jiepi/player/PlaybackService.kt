@@ -233,6 +233,7 @@ class PlaybackService : Service() {
 class CarPlayerProxy(context: Context) : SimpleBasePlayer(context.mainLooper) {
 
     private val appContext: Context = context.applicationContext
+    private val proxyHandler = Handler(context.mainLooper)
 
     // 供外部（PlaybackService）触发状态刷新：invalidateState 是 protected，需在子类内暴露
     fun invalidateNow() {
@@ -317,8 +318,29 @@ class CarPlayerProxy(context: Context) : SimpleBasePlayer(context.mainLooper) {
         return Futures.immediateVoidFuture()
     }
 
-    // 切歌与拖动：SimpleBasePlayer 内部把 next/previous/seekTo 统一换算成窗口索引+位置
+    // 切歌与拖动：SimpleBasePlayer 内部把 next/previous/seekTo 统一换算成窗口索引+位置。
+    // 车机/方向盘 AVRCP 的 skipToNext/skipToPrevious 会以 COMMAND_SEEK_TO_NEXT(9)/
+    // COMMAND_SEEK_TO_PREVIOUS(7)（及 MEDIA_ITEM 变体 8/6）进入本方法，此时必须改道
+    // PlayerManager.next()/previous()，让随机/循环等播放逻辑生效；若按默认"当前窗口索引±1"
+    // 处理会绕过 PlayerManager 的 shuffle 队列（SimpleBasePlayer 的窗口顺序与随机队列是两套），
+    // 表现为随机模式下车机切歌仍按列表顺序。
     override fun handleSeek(windowIndex: Int, positionMs: Long, seekCommand: Int): ListenableFuture<*> {
+        when (seekCommand) {
+            Player.COMMAND_SEEK_TO_NEXT,
+            Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM -> {
+                PlayerManager.next(appContext)
+                // 拦截后 SimpleBasePlayer 仍会按传入 windowIndex 做 pending 状态更新，
+                // post 一次 invalidateNow 覆盖为真实索引，避免车机短暂显示错误曲目。
+                proxyHandler.post { invalidateNow() }
+                return Futures.immediateVoidFuture()
+            }
+            Player.COMMAND_SEEK_TO_PREVIOUS,
+            Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM -> {
+                PlayerManager.previous(appContext)
+                proxyHandler.post { invalidateNow() }
+                return Futures.immediateVoidFuture()
+            }
+        }
         if (windowIndex != PlayerManager.currentIndex && windowIndex in PlayerManager.songPaths.indices) {
             PlayerManager.play(windowIndex, appContext)
         } else if (windowIndex == PlayerManager.currentIndex && PlayerManager.activePlayer != null) {
@@ -383,12 +405,11 @@ private class SongsTimeline(private val paths: List<String>) : Timeline() {
         paths.getOrNull(index) ?: C.INDEX_UNSET
 
     private fun mediaItemFor(index: Int, path: String): MediaItem {
-        val title = if (index == PlayerManager.currentIndex) {
-            PlayerManager.currentDisplayName()
-        } else {
-            path.substringAfterLast('/').substringBeforeLast('.')
-        }
-        val artist = if (index == PlayerManager.currentIndex) PlayerManager.currentArtist().ifBlank { null } else null
+        // 队列每首都优先用 ID3 歌名/歌手（id3Titles 已是 ID3 优先回退文件名的最终显示名）；
+        // 取不到（队列未同步）才回退文件名，保证车机/通知栏整条队列都是真实歌名
+        val title = PlayerManager.id3Titles.getOrNull(index)?.takeIf { it.isNotBlank() }
+            ?: path.substringAfterLast('/').substringBeforeLast('.')
+        val artist = PlayerManager.id3Artists.getOrNull(index)?.takeIf { it.isNotBlank() }
         return MediaItem.Builder()
             .setMediaId(path)
             .setUri(path)

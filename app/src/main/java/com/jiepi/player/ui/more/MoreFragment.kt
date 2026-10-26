@@ -76,7 +76,8 @@ class MoreFragment : Fragment() {
         }
 
         // —— 入口 1：权限展示与说明（折叠面板） ——
-        addRow(MoreUi.menuRow(ctx, "权限展示与说明", "本应用用到的权限及用途") { togglePermissionPanel() })
+        val permissionRow = MoreUi.menuRow(ctx, "权限展示与说明", "本应用用到的权限及用途") { togglePermissionPanel() }
+        addRow(permissionRow)
 
         val permissionPanel = MoreUi.panelBox(ctx)
         val permissions = listOf(
@@ -84,7 +85,8 @@ class MoreFragment : Fragment() {
             "INTERNET" to "联网权限：仅用于检查更新，用完即弃",
             "ACCESS_NETWORK_STATE" to "网络状态：配合联网权限判断网络是否可用",
             "POST_NOTIFICATIONS" to "通知权限：播放状态通知栏常驻展示",
-            "FOREGROUND_SERVICE_MEDIA_PLAYBACK" to "前台服务：后台持续播放音乐"
+            "FOREGROUND_SERVICE_MEDIA_PLAYBACK" to "前台服务：后台持续播放音乐",
+            "REQUEST_INSTALL_PACKAGES" to "安装未知应用：仅当您点击更新包并确认时，用于覆盖安装新版本；可在系统设置中随时关闭"
         )
         permissions.forEachIndexed { i, (name, desc) ->
             val line = LinearLayout(ctx).apply {
@@ -113,7 +115,8 @@ class MoreFragment : Fragment() {
         })
 
         // —— 入口 3：开源声明（折叠面板） ——
-        addRow(MoreUi.menuRow(ctx, "开源声明", "本项目使用的开源库与许可协议") { toggleLicensePanel() })
+        val licenseRow = MoreUi.menuRow(ctx, "开源声明", "本项目使用的开源库与许可协议") { toggleLicensePanel() }
+        addRow(licenseRow)
 
         val licensePanel = MoreUi.panelBox(ctx)
         licenseItems.forEach { (name, desc, index) ->
@@ -139,6 +142,8 @@ class MoreFragment : Fragment() {
         // 记录面板引用，供折叠切换
         morePermissionPanel = permissionPanel
         moreLicensePanel = licensePanel
+        morePermissionRow = permissionRow
+        moreLicenseRow = licenseRow
 
         // 每次重建视图都从收起状态开始（从二级页返回时 view 重建、但实例成员会残留，
         // 不重置会导致折叠标志位与真实 UI 状态不同步，出现"点一次没反应、点两次才展开"）
@@ -148,19 +153,26 @@ class MoreFragment : Fragment() {
 
     private var morePermissionPanel: LinearLayout? = null
     private var moreLicensePanel: LinearLayout? = null
+    private var morePermissionRow: LinearLayout? = null
+    private var moreLicenseRow: LinearLayout? = null
 
     private fun togglePermissionPanel() {
         // 以面板真实可见性为准，不依赖可能过期的标志位，避免"点一次没反应、点两次才展开"
         val panel = morePermissionPanel ?: return
+        val row = morePermissionRow ?: return
         val opening = panel.visibility != View.VISIBLE
         permissionOpen = opening
         panel.visibility = if (opening) View.VISIBLE else View.GONE
+        // 箭头旋转与面板真实状态同步：每次以 visibility 重新判定，缓存/重建异常也不会错位
+        MoreUi.rotateArrow(row, opening)
     }
 
     private fun toggleLicensePanel() {
         val panel = moreLicensePanel ?: return
+        val row = moreLicenseRow ?: return
         val opening = panel.visibility != View.VISIBLE
         licenseOpen = opening
         panel.visibility = if (opening) View.VISIBLE else View.GONE
+        MoreUi.rotateArrow(row, opening)
     }
 }

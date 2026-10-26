@@ -9,8 +9,10 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.jiepi.player.R
 import com.jiepi.player.ui.NeonCard
 
 /**
@@ -31,6 +33,31 @@ object MoreUi {
         return (0xFF shl 24) or (r shl 16) or (g shl 8) or b
     }
 
+    // 圆角水波纹（全 App 统一标准做法）：
+    // content 传圆角背景（普通态 + 按压提亮态），mask 传同圆角裁剪层，
+    // 波纹被约束在圆角范围内，不再按矩形边界扩散导致四角溢出圆角按钮。
+    fun roundedRipple(context: Context, cornerPx: Float, normalColor: Int): RippleDrawable {
+        val bg = StateListDrawable().apply {
+            addState(intArrayOf(android.R.attr.state_pressed), GradientDrawable().apply {
+                setColor(pressLighten(normalColor))
+                cornerRadius = cornerPx
+            })
+            addState(intArrayOf(), GradientDrawable().apply {
+                setColor(normalColor)
+                cornerRadius = cornerPx
+            })
+        }
+        return RippleDrawable(
+            ColorStateList.valueOf(0x22FFFFFF.toInt()),
+            bg,
+            GradientDrawable().apply {
+                // mask 颜色任意，仅作为裁剪遮罩参与绘制
+                setColor(0xFF000000.toInt())
+                cornerRadius = cornerPx
+            }
+        )
+    }
+
     // 霓虹卡片根：深灰圆角 24dp + 整圈四色描边（弹窗/大卡片用）
     fun neonCardRoot(context: Context): LinearLayout =
         LinearLayout(context).apply {
@@ -49,17 +76,7 @@ object MoreUi {
             gravity = Gravity.CENTER
             setTextColor(textColor)
             setPadding(dp(context, 24), 0, dp(context, 24), 0)
-            background = StateListDrawable().apply {
-                addState(intArrayOf(android.R.attr.state_pressed), GradientDrawable().apply {
-                    setColor(pressLighten(NeonCard.BUTTON))
-                    cornerRadius = dp(context, 28).toFloat()
-                })
-                addState(intArrayOf(), GradientDrawable().apply {
-                    setColor(NeonCard.BUTTON)
-                    cornerRadius = dp(context, 28).toFloat()
-                })
-            }
-            foreground = RippleDrawable(ColorStateList.valueOf(0x22FFFFFF.toInt()), null, null)
+            background = roundedRipple(context, dp(context, 28).toFloat(), NeonCard.BUTTON)
             setOnClickListener { onClick() }
         }
 
@@ -69,17 +86,7 @@ object MoreUi {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             val corner = dp(context, 20).toFloat()
-            background = StateListDrawable().apply {
-                addState(intArrayOf(android.R.attr.state_pressed), GradientDrawable().apply {
-                    setColor(pressLighten(NeonCard.BUTTON))
-                    cornerRadius = corner
-                })
-                addState(intArrayOf(), GradientDrawable().apply {
-                    setColor(NeonCard.BUTTON)
-                    cornerRadius = corner
-                })
-            }
-            foreground = RippleDrawable(ColorStateList.valueOf(0x22FFFFFF.toInt()), null, null)
+            background = roundedRipple(context, corner, NeonCard.BUTTON)
             setPadding(dp(context, 16), dp(context, 8), dp(context, 16), dp(context, 8))
             setOnClickListener { onClick() }
 
@@ -99,12 +106,33 @@ object MoreUi {
                 setPadding(0, dp(context, 3), 0, 0)
             }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
             addView(textBox, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            addView(TextView(context).apply {
-                text = "›"
-                textSize = 26f
-                setTextColor(NeonCard.SUB)
-            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            val arrow = ImageView(context).apply {
+                setImageResource(R.drawable.ic_chevron_right)
+                setColorFilter(NeonCard.SUB)
+                // 图标中心 = View 中心，旋转绕 View 中心即绕图标中心，绝对精确（无字体度量偏移）
+            }
+            // 固定正方形尺寸：图标中心 = 容器中心，旋转 pivot 取容器中心即绕图标中心转
+            addView(arrow, LinearLayout.LayoutParams(dp(context, 24), dp(context, 24)))
+            // 记录箭头引用：折叠面板类入口用 row.tag 取箭头做旋转动画；非抽屉入口不调用无副作用
+            this.tag = arrow
         }
+
+    // 抽屉箭头旋转：展开→顺时针旋转 90°（箭头朝下），收起→逆时针转回 0°（箭头朝右）
+    // 旋转中心取箭头自身几何中心（View 默认 pivot 在左上角，直接 rotation 会绕一角转、视觉别扭）；
+    // 动画直接落到目标角度而非递增：即使中途被打断也会停在正确位置；
+    // 调用方每次都以面板真实可见性重新计算 open，箭头状态与抽屉真实状态天然同步，不会错位
+    fun rotateArrow(row: View, open: Boolean) {
+        val arrow = row.tag as? View ?: return
+        // 布局可能尚未完成：此刻 width/height 为 0，若直接设 pivotX = 0 会导致旋转仍绕左上角（一角钉住不动）。
+        // post 到下一帧保证拿到真实几何尺寸后，再以几何中心为轴心旋转。
+        arrow.post {
+            val px = arrow.width / 2f
+            val py = arrow.height / 2f
+            if (arrow.pivotX != px) arrow.pivotX = px
+            if (arrow.pivotY != py) arrow.pivotY = py
+            arrow.animate().rotation(if (open) 90f else 0f).setDuration(150).start()
+        }
+    }
 
     // 抽屉面板：内嵌深灰圆角盒，内容由调用方填充（默认隐藏）
     fun panelBox(context: Context): LinearLayout =
@@ -116,6 +144,50 @@ object MoreUi {
             }
             setPadding(dp(context, 18), dp(context, 16), dp(context, 18), dp(context, 16))
             visibility = View.GONE
+        }
+
+    // 可点击详情行：左标签 + 右侧箭头（关于页"联系客服"用），样式对齐 infoRow（15f 白字、普通字重），带按压提亮与水波纹
+    fun infoRowAction(context: Context, title: String, onClick: () -> Unit): LinearLayout =
+        LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            val corner = dp(context, 20).toFloat()
+            background = roundedRipple(context, corner, NeonCard.BUTTON)
+            setPadding(dp(context, 18), dp(context, 14), dp(context, 18), dp(context, 14))
+            setOnClickListener { onClick() }
+
+            addView(TextView(context).apply {
+                text = title
+                textSize = 15f
+                setTextColor(NeonCard.WHITE)
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            val arrow = ImageView(context).apply {
+                setImageResource(R.drawable.ic_chevron_right)
+                setColorFilter(NeonCard.SUB)
+                // 图标中心 = View 中心，旋转绕 View 中心即绕图标中心，绝对精确（无字体度量偏移）
+            }
+            // 固定正方形尺寸：图标中心 = 容器中心，旋转 pivot 取容器中心即绕图标中心转
+            addView(arrow, LinearLayout.LayoutParams(dp(context, 24), dp(context, 24)))
+            // 记录箭头引用：折叠面板类入口用 row.tag 取箭头做旋转动画
+            this.tag = arrow
+        }
+
+    // 面板内纯文字单行按钮：深灰圆角条（BUTTON 色）+ 按压提亮 + 水波纹，左文字上下居中、无副描述无箭头
+    // （联系客服抽屉里的 QQ 行用）
+    fun plainRow(context: Context, label: String, onClick: () -> Unit): LinearLayout =
+        LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            val corner = dp(context, 20).toFloat()
+            background = roundedRipple(context, corner, NeonCard.BUTTON)
+            setPadding(dp(context, 18), dp(context, 14), dp(context, 18), dp(context, 14))
+            setOnClickListener { onClick() }
+
+            addView(TextView(context).apply {
+                text = label
+                textSize = 15f
+                setTextColor(NeonCard.WHITE)
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         }
 
     // 二级页顶部栏：返回箭头 + 标题
@@ -213,17 +285,7 @@ object MoreUi {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             val corner = dp(context, 20).toFloat()
-            background = StateListDrawable().apply {
-                addState(intArrayOf(android.R.attr.state_pressed), GradientDrawable().apply {
-                    setColor(pressLighten(NeonCard.BUTTON))
-                    cornerRadius = corner
-                })
-                addState(intArrayOf(), GradientDrawable().apply {
-                    setColor(NeonCard.BUTTON)
-                    cornerRadius = corner
-                })
-            }
-            foreground = RippleDrawable(ColorStateList.valueOf(0x22FFFFFF.toInt()), null, null)
+            background = roundedRipple(context, corner, NeonCard.BUTTON)
             setPadding(dp(context, 18), dp(context, 14), dp(context, 18), dp(context, 14))
 
             val textBox = LinearLayout(context).apply {

@@ -33,8 +33,15 @@ class RecycleBinFragment : Fragment() {
     private var _binding: FragmentRecycleBinBinding? = null
     private val binding get() = _binding!!
 
-    // 回收站条目：地址 + 歌名 + 删除时间
-    private data class Entry(val path: String, val name: String, val time: Long)
+    // 回收站条目：地址 + 歌名 + 删除时间；
+    // id3Title/id3Artist 冗余存删除时的 ID3，显示/恢复优先用它（旧数据缺字段回退 name）
+    private data class Entry(
+        val path: String,
+        val name: String,
+        val time: Long,
+        val id3Title: String? = null,
+        val id3Artist: String? = null
+    )
 
     private var entries = mutableListOf<Entry>()
 
@@ -73,7 +80,9 @@ class RecycleBinFragment : Fragment() {
                     Entry(
                         obj.getString("path"),
                         obj.getString("name"),
-                        obj.optLong("time", 0L)
+                        obj.optLong("time", 0L),
+                        obj.optString("id3Title", "").ifEmpty { null },
+                        obj.optString("id3Artist", "").ifEmpty { null }
                     )
                 )
             }
@@ -206,13 +215,13 @@ class RecycleBinFragment : Fragment() {
             e.path,
             e.name,
             "",
-            e.name.substringBeforeLast('.'),
-            ""
+            e.id3Title ?: e.name.substringBeforeLast('.'),
+            e.id3Artist ?: ""
         )
         // 顺带通知歌曲页自动刷新（等同一次下拉扫描）：恢复的歌立刻出现在歌曲页列表，
         // 不用用户手动下拉。歌曲页 view 已销毁时回调为 null，返回歌曲页时本页自动扫描兜底
         MusicFragment.onSongsRestoredExternally?.invoke()
-        Toast.makeText(requireContext(), "已恢复：${e.name}（返回歌曲页即可看到）", Toast.LENGTH_SHORT).show()
+        Toast.makeText(requireContext(), "已恢复：${e.id3Title ?: e.name}（返回歌曲页即可看到）", Toast.LENGTH_SHORT).show()
         buildPage()
     }
 }

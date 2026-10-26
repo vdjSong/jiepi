@@ -91,9 +91,42 @@ class AboutFragment : Fragment() {
         addRow(MoreUi.menuRow(ctx, "检查更新", "联网检查 GitHub 最新版本", onClick = {
             checkUpdate(ctx)
         }))
-        addRow(MoreUi.menuRow(ctx, "联系客服", "QQ：120826194（纯文字展示，不跳转）", onClick = {
-            Toast.makeText(ctx, "联系客服：QQ 120826194", Toast.LENGTH_SHORT).show()
-        }))
+        val contactRow = MoreUi.infoRowAction(ctx, "联系客服") { toggleContactPanel() }
+        addRow(contactRow)
+
+        // QQ 行：仿"开源声明"展开样式——CARD 底色圆角面板内嵌纯文字按钮行（无副描述、无箭头，文字上下居中）
+        val contactPanel = MoreUi.panelBox(ctx)
+        contactPanel.addView(
+            MoreUi.plainRow(ctx, "QQ：120826194") {
+                Toast.makeText(ctx, "联系客服：QQ 120826194", Toast.LENGTH_SHORT).show()
+            },
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        )
+        // 抖音行：同一面板内第二个纯文字按钮行
+        contactPanel.addView(
+            MoreUi.plainRow(ctx, "抖音：dyxSong") {
+                Toast.makeText(ctx, "抖音：dyxSong", Toast.LENGTH_SHORT).show()
+            },
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = MoreUi.dp(ctx, 10)
+            }
+        )
+        addRow(contactPanel)
+        moreContactPanel = contactPanel
+        moreContactRow = contactRow
+    }
+
+    private var moreContactPanel: LinearLayout? = null
+    private var moreContactRow: LinearLayout? = null
+
+    private fun toggleContactPanel() {
+        // 以面板真实可见性为准，避免标志位与 UI 状态不同步
+        val panel = moreContactPanel ?: return
+        val row = moreContactRow ?: return
+        val opening = panel.visibility != View.VISIBLE
+        panel.visibility = if (opening) View.VISIBLE else View.GONE
+        // 箭头旋转与面板真实状态同步：每次以 visibility 重新判定，缓存/重建异常也不会错位
+        MoreUi.rotateArrow(row, opening)
     }
 
     /**

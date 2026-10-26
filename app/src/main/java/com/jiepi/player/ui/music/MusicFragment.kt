@@ -2,6 +2,7 @@
 // Copyright (c) 2026 vdjSong. Licensed under GPL-3.0.
 package com.jiepi.player.ui.music
 
+import java.util.concurrent.Executors
 import android.app.AlertDialog
 import android.app.Dialog
 import android.content.Context
@@ -47,19 +48,12 @@ import android.graphics.drawable.InsetDrawable
 import android.graphics.drawable.RippleDrawable
 import android.graphics.drawable.StateListDrawable
 import com.jiepi.player.ui.NeonCard
+import com.jiepi.player.ui.more.MoreUi
 
 class MusicFragment : Fragment() {
 
     private var _binding: FragmentMusicBinding? = null
     private val binding get() = _binding!!
-
-    // 按压提亮：把颜色往白色方向抬，模拟半透明白覆盖在按钮上的效果
-    private fun pressLighten(color: Int): Int {
-        val r = (((color shr 16) and 0xFF) + 45).coerceAtMost(255)
-        val g = (((color shr 8) and 0xFF) + 45).coerceAtMost(255)
-        val b = ((color and 0xFF) + 45).coerceAtMost(255)
-        return (0xFF shl 24) or (r shl 16) or (g shl 8) or b
-    }
 
     // 进程内缓存：切页面秒开；磁盘缓存：App 重启秒开；后台扫描：对齐增删
     companion object {
@@ -101,17 +95,32 @@ class MusicFragment : Fragment() {
         )
     }
 
+    // 批量补读 ID3：轻量解析器单首毫秒级，4 线程并发进一步提速；单首失败回退原条目
+    private fun enrichWithId3Parallel(songs: List<Song>, ctx: Context): List<Song> {
+        if (songs.isEmpty()) return songs
+        val pool = Executors.newFixedThreadPool(4)
+        return try {
+            val futures = songs.map { s -> pool.submit<Song> { enrichWithId3(s, ctx) } }
+            futures.map { it.get() }
+        } finally {
+            pool.shutdown()
+        }
+    }
+
     // 一个歌单：名字 + 里面装的歌（存歌曲地址，App 重启不丢）
     private data class Playlist(
         var name: String,
         val songs: MutableList<String>
     )
 
-    // 回收站里的一首歌：地址 + 歌名 + 删除时间（App 重启不丢，可恢复）
+    // 回收站里的一首歌：地址 + 歌名 + 删除时间（App 重启不丢，可恢复）；
+    // id3Title/id3Artist 冗余存删除时的 ID3，恢复/显示优先用它（旧数据缺字段回退 name）
     private data class RecycleEntry(
         val path: String,
         val name: String,
-        val time: Long
+        val time: Long,
+        val id3Title: String? = null,
+        val id3Artist: String? = null
     )
 
     // 列表里的一行：组头 or 歌曲
@@ -499,8 +508,8 @@ class MusicFragment : Fragment() {
                 resortFullOnce = false
             }
             // 新歌/变更歌先批量读 ID3：排序键是 displayName（ID3 优先），必须先拿到 ID3 再排序
-            // map 返回只读 List 没有 sortWith，用 sortedWith 直接产出排好序的新列表
-            val enrichedAdded = added.map { enrichWithId3(it, ctx) }.sortedWith(
+            // 轻量解析器 + 4 线程并行；map 返回只读 List 没有 sortWith，用 sortedWith 直接产出排好序的新列表
+            val enrichedAdded = enrichWithId3Parallel(added, ctx).sortedWith(
                 Comparator { a, b -> compareName(a.displayName, b.displayName) }
             )
             val found = mergeSorted(kept, enrichedAdded)
@@ -951,29 +960,8 @@ class MusicFragment : Fragment() {
                 gravity = Gravity.CENTER
                 setTextColor(textColor)
                 setPadding(dp(24), 0, dp(24), 0)
-                // 背景：默认深灰，红/蓝按钮由 bgColor 传语义色；按压时向白提亮模拟半透明覆盖
-                background = StateListDrawable().apply {
-                    addState(
-                        intArrayOf(android.R.attr.state_pressed),
-                        GradientDrawable().apply {
-                            setColor(pressLighten(bgColor))
-                            cornerRadius = dp(28).toFloat()
-                        }
-                    )
-                    addState(
-                        intArrayOf(),
-                        GradientDrawable().apply {
-                            setColor(bgColor)
-                            cornerRadius = dp(28).toFloat()
-                        }
-                    )
-                }
-                // 前景水波纹，提供按压反馈
-                foreground = RippleDrawable(
-                    ColorStateList.valueOf(0x22FFFFFF.toInt()),
-                    null,
-                    null
-                )
+                // 背景：圆角水波纹（content+mask 双圆角，波纹不溢出四角）
+                background = MoreUi.roundedRipple(requireContext(), dp(28).toFloat(), bgColor)
                 setOnClickListener {
                     dialog.dismiss()
                     onClick()
@@ -1073,7 +1061,9 @@ class MusicFragment : Fragment() {
                     RecycleEntry(
                         obj.getString("path"),
                         obj.getString("name"),
-                        obj.optLong("time", 0L)
+                        obj.optLong("time", 0L),
+                        obj.optString("id3Title", "").ifEmpty { null },
+                        obj.optString("id3Artist", "").ifEmpty { null }
                     )
                 )
             }
@@ -1091,6 +1081,8 @@ class MusicFragment : Fragment() {
                     .put("path", e.path)
                     .put("name", e.name)
                     .put("time", e.time)
+                    .put("id3Title", e.id3Title ?: "")
+                    .put("id3Artist", e.id3Artist ?: "")
             )
         }
         requireContext().getSharedPreferences("jiepi_data", Context.MODE_PRIVATE)
@@ -1114,7 +1106,8 @@ class MusicFragment : Fragment() {
         val names = recycleBin.map { e ->
             val t = java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault())
                 .format(java.util.Date(e.time))
-            "${e.name}\n（删除于 $t）"
+            val display = e.id3Title?.takeIf { it.isNotBlank() } ?: e.name
+            "$display\n（删除于 $t）"
         }.toTypedArray()
         val checked = BooleanArray(names.size)
         val dialog = AlertDialog.Builder(requireContext())
@@ -1610,29 +1603,8 @@ class MusicFragment : Fragment() {
                 gravity = Gravity.CENTER
                 setTextColor(textColor)
                 setPadding(dp(24), 0, dp(24), 0)
-                // 背景：默认深灰，红/蓝按钮由 bgColor 传语义色；按压时向白提亮模拟半透明覆盖
-                background = StateListDrawable().apply {
-                    addState(
-                        intArrayOf(android.R.attr.state_pressed),
-                        GradientDrawable().apply {
-                            setColor(pressLighten(bgColor))
-                            cornerRadius = dp(28).toFloat()
-                        }
-                    )
-                    addState(
-                        intArrayOf(),
-                        GradientDrawable().apply {
-                            setColor(bgColor)
-                            cornerRadius = dp(28).toFloat()
-                        }
-                    )
-                }
-                // 前景水波纹，提供按压反馈
-                foreground = RippleDrawable(
-                    ColorStateList.valueOf(0x22FFFFFF.toInt()),
-                    null,
-                    null
-                )
+                // 背景：圆角水波纹（content+mask 双圆角，波纹不溢出四角）
+                background = MoreUi.roundedRipple(requireContext(), dp(28).toFloat(), bgColor)
                 setOnClickListener {
                     dialog.dismiss()
                     onClick()
@@ -1949,23 +1921,7 @@ class MusicFragment : Fragment() {
             gravity = Gravity.CENTER
             setTextColor(textColor)
             setPadding(dp(24), 0, dp(24), 0)
-            background = StateListDrawable().apply {
-                addState(
-                    intArrayOf(android.R.attr.state_pressed),
-                    GradientDrawable().apply {
-                        setColor(pressLighten(NeonCard.BUTTON))
-                        cornerRadius = dp(28).toFloat()
-                    }
-                )
-                addState(
-                    intArrayOf(),
-                    GradientDrawable().apply {
-                        setColor(NeonCard.BUTTON)
-                        cornerRadius = dp(28).toFloat()
-                    }
-                )
-            }
-            foreground = RippleDrawable(ColorStateList.valueOf(0x22FFFFFF.toInt()), null, null)
+            background = MoreUi.roundedRipple(requireContext(), dp(28).toFloat(), NeonCard.BUTTON)
             setOnClickListener { onClick() }
         }
     }
