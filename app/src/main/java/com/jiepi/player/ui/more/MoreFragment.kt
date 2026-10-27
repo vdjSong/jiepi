@@ -82,7 +82,7 @@ class MoreFragment : Fragment() {
         val permissionPanel = MoreUi.panelBox(ctx)
         val permissions = listOf(
             "SAF（存储访问框架）" to "您亲自挑选文件夹授权给本应用，App 只能读写您授权的文件夹，拿不到其他任何文件，因此无需任何存储权限。找歌、删歌只在授权文件夹内进行；授权可随时在系统设置中撤销",
-            "INTERNET" to "联网权限：仅用于检查更新，用完即弃",
+            "INTERNET" to "联网权限：用于检查更新、下载新的安装包、下载歌词（下载的歌词文件是您用自己的WiFi和流量下载的，歌词文件理应视为您的财产，卸载该app时不会随之销毁，我们会将下载到的歌词文件存放在您授权的歌曲同目录）",
             "ACCESS_NETWORK_STATE" to "网络状态：配合联网权限判断网络是否可用",
             "POST_NOTIFICATIONS" to "通知权限：播放状态通知栏常驻展示",
             "FOREGROUND_SERVICE_MEDIA_PLAYBACK" to "前台服务：后台持续播放音乐",

@@ -23,13 +23,18 @@ import androidx.activity.OnBackPressedCallback
 import androidx.documentfile.provider.DocumentFile
 import androidx.fragment.app.Fragment
 import androidx.navigation.fragment.findNavController
+import com.jiepi.player.LyricDownloader
 import com.jiepi.player.PlayerManager
 import com.jiepi.player.R
 import com.jiepi.player.databinding.FragmentPlayBinding
 import com.jiepi.player.ui.NeonCard
+import com.jiepi.player.ui.music.Id3Reader
 import org.json.JSONArray
 import java.io.File
 import java.security.MessageDigest
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 class PlayFragment : Fragment() {
 
@@ -50,6 +55,8 @@ class PlayFragment : Fragment() {
     private var lastSongIndex = -1
     // 播放/暂停图标上次刷的状态（只在真正变化时才重绘，避免周期刷新闪跳）
     private var lastPlaying: Boolean? = null
+    // 歌词加载代次：每次找歌词 +1，旧代次的回调（延迟显示/就绪提示）一律丢弃，防止切歌后串台
+    private var lyricLoadSeq = 0
 
     // 歌词本地缓存目录（App 私有目录，不需要任何权限）
     companion object {
@@ -99,6 +106,9 @@ class PlayFragment : Fragment() {
                 findNavController().navigate(R.id.navigation_music)
             }
         }
+
+        // 右上角歌词图标：本地没有歌词时出现，点击下载歌词（下载权交给用户）
+        binding.btnDownloadLyric.setOnClickListener { downloadLyric() }
 
         // 变速：弹圆角小窗选速度（先看UI，真实变速后接）
         binding.btnSpeed.setOnClickListener { showSpeedDialog() }
@@ -255,7 +265,9 @@ class PlayFragment : Fragment() {
 
     // 找歌词并解析（后台线程读，不卡界面）：
     // 1. 先看本地缓存（App 私有目录，秒读）
-    // 2. 没有缓存：走 SAF 从歌所在文件夹找同名 .lrc，找到就写本地缓存，下次秒读
+    // 2. 无缓存：并发读音频文件内嵌歌词（MP3 USLT / FLAC·OGG LYRICS）+ SAF 找同名 .lrc，谁先出用谁
+    // 3. SAF 线性遍历慢：最多等 1.5s，超时先出"暂无歌词"，后台继续等，真找到了再悄悄刷新
+    // 4. 每次播放都完整找一遍（不写持久 miss 标记）：下次播放重新扫，用户刚放的歌词文件立刻能发现
     private fun loadLrc() {
         lyrics = emptyList()
         lastLyricIndex = -1
@@ -274,11 +286,15 @@ class PlayFragment : Fragment() {
         val lrcName = PlayerManager.songNames[idx].substringBeforeLast('.') + ".lrc"
         val songPath = PlayerManager.songPaths.getOrNull(idx) ?: ""
         val dirUri = PlayerManager.currentDir()
-        // 先显示"加载中"，后台慢慢读，界面不卡
-        binding.lyricText.text = "歌词加载中…"
+        // 先显示"正在查找歌词…" + 转圈，后台慢慢读，界面不卡
+        binding.lyricText.text = "正在查找歌词…"
+        binding.lyricLoading.visibility = View.VISIBLE
         showLyricHint()
         // 用应用级 context 读文件，避免页面关了还拿着旧界面
         val ctx = requireContext().applicationContext
+        // 加载代次：防止切歌后旧线程的结果/延迟提示覆盖新歌
+        val loadSeq = ++lyricLoadSeq
+        val startMs = System.currentTimeMillis()
 
         Thread {
             var raw: String? = null
@@ -290,52 +306,166 @@ class PlayFragment : Fragment() {
                 raw = cacheFile.readText()
             }
 
-            // 2. 没有缓存：走 SAF 从歌所在文件夹找同名 .lrc（后台读），找到就写本地缓存
-            if (raw == null && dirUri.isNotEmpty()) {
-                try {
-                    val dirDoc = DocumentFile.fromTreeUri(ctx, Uri.parse(dirUri))
-                    val lrcFile = dirDoc?.findFile(lrcName)
-                    if (lrcFile != null && lrcFile.isFile) {
-                        val bytes = ctx.contentResolver.openInputStream(lrcFile.uri)
-                            ?.use { it.readBytes() }
-                        if (bytes != null && bytes.isNotEmpty()) {
-                            var text = String(bytes, Charsets.UTF_8)
-                            val timeTag = Regex("""\[\d{1,2}:\d{2}""")
-                            if (!timeTag.containsMatchIn(text)) {
-                                text = String(bytes, java.nio.charset.Charset.forName("GBK"))
+            if (raw == null && songPath.isNotEmpty()) {
+                // 2. 并发：内嵌歌词 + SAF 同名 .lrc 同时找，谁先出结果用谁
+                val embeddedRef = AtomicReference<String?>()
+                val safRef = AtomicReference<String?>()
+                val latch = CountDownLatch(2)
+
+                Thread {
+                    try {
+                        val embedded = Id3Reader.readLyrics(ctx, Uri.parse(songPath))
+                        if (embedded != null && embedded.isNotBlank()) embeddedRef.set(embedded)
+                    } catch (e: Exception) {
+                        // 读失败就当没有
+                    }
+                    latch.countDown()
+                }.start()
+
+                Thread {
+                    try {
+                        if (dirUri.isNotEmpty()) {
+                            val dirDoc = DocumentFile.fromTreeUri(ctx, Uri.parse(dirUri))
+                            val lrcFile = dirDoc?.findFile(lrcName)
+                            if (lrcFile != null && lrcFile.isFile) {
+                                val bytes = ctx.contentResolver.openInputStream(lrcFile.uri)
+                                    ?.use { it.readBytes() }
+                                if (bytes != null && bytes.isNotEmpty()) {
+                                    var text = String(bytes, Charsets.UTF_8)
+                                    val timeTag = Regex("""\[\d{1,2}:\d{2}""")
+                                    if (!timeTag.containsMatchIn(text)) {
+                                        text = String(bytes, java.nio.charset.Charset.forName("GBK"))
+                                    }
+                                    safRef.set(text)
+                                }
                             }
-                            raw = text
+                        }
+                    } catch (e: Exception) {
+                        // 读失败就当没有，稍后再试
+                    }
+                    latch.countDown()
+                }.start()
+
+                // 3. 最多等 1.5s（SAF 线性遍历最慢，超时不傻等；内嵌毫秒级，通常立刻有结果）
+                latch.await(1500, TimeUnit.MILLISECONDS)
+                raw = embeddedRef.get() ?: safRef.get()
+
+                if (raw != null) {
+                    // 找到了：写缓存，下次秒读
+                    try {
+                        cacheDir.mkdirs()
+                        cacheFile.writeText(raw)
+                    } catch (e: Exception) {
+                        // 缓存写失败不致命
+                    }
+                } else if (latch.count > 0) {
+                    // 超时兜底：先出"暂无歌词"，后台继续等真结果，找到了再悄悄刷新
+                    val seq = loadSeq
+                    handler.post {
+                        if (!isAdded || _binding == null || seq != lyricLoadSeq) return@post
+                        binding.lyricLoading.visibility = View.GONE
+                        lyrics = emptyList()
+                        binding.lyricText.text = "暂无歌词"
+                        showLyricHint()
+                    }
+                    Thread {
+                        latch.await()
+                        val late = embeddedRef.get() ?: safRef.get()
+                        if (late != null) {
                             try {
                                 cacheDir.mkdirs()
-                                cacheFile.writeText(text)  // 统一按 UTF-8 存，下次直接秒读
+                                cacheFile.writeText(late)
                             } catch (e: Exception) {
                                 // 缓存写失败不致命，下次再写
                             }
+                            val finalLate = late
+                            handler.post {
+                                if (!isAdded || _binding == null || seq != lyricLoadSeq) return@post
+                                applyLyricResult(finalLate, seq, startMs)
+                            }
                         }
-                    }
-                } catch (e: Exception) {
-                    // 读失败就当没有，稍后再试
+                    }.start()
+                    return@Thread
                 }
             }
 
+            // 4. 缓存命中 / 并发拿到 / 并发确认都没有 → 直接出结果
             val finalRaw = raw
-            // 回主线程更新界面（页面可能已经关了，先检查再动）
+            handler.post {
+                if (!isAdded || _binding == null || loadSeq != lyricLoadSeq) return@post
+                applyLyricResult(finalRaw, loadSeq, startMs)
+            }
+        }.start()
+    }
+
+    // 把找到的歌词应用到界面：闪"歌词就绪 · x.xs"提示，短暂延迟后切到歌词框
+    private fun applyLyricResult(raw: String?, loadSeq: Int, startMs: Long) {
+        if (!isAdded || _binding == null || loadSeq != lyricLoadSeq) return
+        binding.lyricLoading.visibility = View.GONE
+        if (raw == null) {
+            lyrics = emptyList()
+            binding.lyricText.text = "暂无歌词"
+            showLyricHint()
+            return
+        }
+        val parsed = parseLrc(raw)
+        lyrics = parsed
+        if (parsed.isEmpty()) {
+            binding.lyricText.text = "歌词文件里没有时间标签"
+            showLyricHint()
+        } else {
+            // 就绪提示闪一下，再切歌词框
+            val elapsedMs = System.currentTimeMillis() - startMs
+            binding.lyricText.text = "歌词就绪 · " + String.format("%.1f", elapsedMs / 1000f) + "s"
+            showLyricHint()
+            handler.postDelayed({
+                if (!isAdded || _binding == null || loadSeq != lyricLoadSeq) return@postDelayed
+                showLyricBox()
+            }, 800)
+        }
+    }
+
+    // 右上角图标点击：下载歌词（LRCLIB 主源 + LrcApi 保底）。
+    // 流程：提示【正在适配歌词】→ 后台联网 → 成功写缓存 + 歌曲文件夹同名 .lrc 并重载歌词（自然显示，不再提示）；
+    // 失败提示【适配失败】。下载期间禁用图标防连点。
+    private fun downloadLyric() {
+        // 图标常驻：已有可用歌词/本地有 .lrc 但无时间标签时，点击不重复下载（下载了也用不了/没必要）
+        if (lyrics.isNotEmpty() || binding.lyricText.text == "歌词文件里没有时间标签") return
+        val idx = PlayerManager.currentIndex
+        if (idx !in PlayerManager.songNames.indices) return
+        val searchTitle = PlayerManager.id3Titles.getOrNull(idx)?.takeIf { it.isNotBlank() } ?: return
+        val searchArtist = PlayerManager.id3Artists.getOrNull(idx).orEmpty()
+        val songPath = PlayerManager.songPaths.getOrNull(idx) ?: ""
+        val lrcName = PlayerManager.songNames[idx].substringBeforeLast('.') + ".lrc"
+        val dirUri = PlayerManager.currentDir()
+        val ctx = requireContext().applicationContext
+        Toast.makeText(requireContext(), "正在适配歌词", Toast.LENGTH_SHORT).show()
+        binding.btnDownloadLyric.isEnabled = false
+        val cacheDir = File(ctx.filesDir, LRC_CACHE_DIR)
+        val cacheFile = File(cacheDir, lyricCacheName(songPath))
+        Thread {
+            val downloaded = try {
+                LyricDownloader.fetch(searchArtist, searchTitle)
+            } catch (e: Exception) {
+                null
+            }
             handler.post {
                 if (!isAdded || _binding == null) return@post
-                if (finalRaw == null) {
-                    lyrics = emptyList()
-                    binding.lyricText.text = "暂无歌词"
-                    showLyricHint()
+                binding.btnDownloadLyric.isEnabled = true
+                if (downloaded.isNullOrBlank()) {
+                    Toast.makeText(requireContext(), "适配失败", Toast.LENGTH_SHORT).show()
                     return@post
                 }
-                val parsed = parseLrc(finalRaw)
-                lyrics = parsed
-                if (parsed.isEmpty()) {
-                    binding.lyricText.text = "歌词文件里没有时间标签"
-                    showLyricHint()
-                } else {
-                    showLyricBox()
+                try {
+                    cacheDir.mkdirs()
+                    cacheFile.writeText(downloaded)  // 缓存统一 UTF-8，下次秒读
+                } catch (e: Exception) {
+                    // 缓存写失败不致命
                 }
+                // 歌词写进歌曲文件夹（SAF），卸载软件也不丢——这是用户的财产
+                writeLrcToSongDir(ctx, dirUri, lrcName, downloaded)
+                // 重载歌词：缓存已就位，自然显示，无需额外提示
+                loadLrc()
             }
         }.start()
     }
@@ -345,6 +475,32 @@ class PlayFragment : Fragment() {
         val digest = MessageDigest.getInstance("MD5")
             .digest(songPath.toByteArray(Charsets.UTF_8))
         return digest.joinToString("") { "%02x".format(it) } + ".lrc"
+    }
+
+    // 把下载到的歌词写进歌曲所在文件夹的同名 .lrc（SAF 授权目录）。
+    // 歌词是用户流量换来的财产：必须落在歌曲文件夹里，卸载软件也不丢；
+    // 写入失败返回 false（此时只有应用私有缓存，卸载会跟着清掉），调用方需告知用户。
+    // 播放页按「歌名去扩展名 + .lrc」在同目录找歌词，写这里下次直接命中；
+    // 外部播放器/文件管理器也能看到这份歌词。
+    private fun writeLrcToSongDir(ctx: Context, dirUri: String, lrcName: String, content: String): Boolean {
+        if (dirUri.isBlank()) return false
+        return try {
+            val dirDoc = DocumentFile.fromTreeUri(ctx, Uri.parse(dirUri)) ?: return false
+            var lrcFile = dirDoc.findFile(lrcName)
+            if (lrcFile == null || !lrcFile.isFile) {
+                lrcFile = dirDoc.createFile("text/plain", lrcName) ?: return false
+            }
+            val out = ctx.contentResolver.openOutputStream(lrcFile.uri)
+            if (out == null) return false
+            out.use {
+                it.write(content.toByteArray(Charsets.UTF_8))
+                it.flush()
+            }
+            true
+        } catch (e: Exception) {
+            // 目录只读/权限异常
+            false
+        }
     }
 
     // 清理孤儿歌词缓存：跟歌曲清单（MusicFragment 写的磁盘缓存）对一下，
@@ -363,7 +519,8 @@ class PlayFragment : Fragment() {
                 val dir = File(c.filesDir, LRC_CACHE_DIR)
                 if (!dir.exists()) return@Thread
                 dir.listFiles()?.forEach { f ->
-                    if (f.name !in valid) f.delete()
+                    // 只清歌词缓存文件；找不到的歌曲下次播放重新扫，不留标记
+                    if (f.name.endsWith(".lrc") && f.name !in valid) f.delete()
                 }
             } catch (e: Exception) {
                 // 清理失败不致命，下次再清
@@ -371,35 +528,63 @@ class PlayFragment : Fragment() {
         }.start()
     }
 
-    // 手动解析歌词：把 [分:秒] 或 [分:秒.毫秒] 的标签和文字抠出来（不怕粘贴丢符号）
+    // 手动解析歌词：把 [分:秒] 或 [分:秒.毫秒] 的标签和文字抠出来（不怕粘贴丢符号）。
+    // 方案B 增强兼容：
+    //  - 增强LRC：剥掉尖括号词级时间戳 <mm:ss.xx>；同一行≥4个短逐字片段合并回整句（避免逐字拆成单字行）
+    //  - 元数据标签：[ti:]/[ar:]/[al:]/[by:] 等字母开头标签只跳过、不产生歌词行
     private fun parseLrc(raw: String): List<LyricLine> {
         val result = mutableListOf<LyricLine>()
-        var i = 0
-        while (i < raw.length) {
-            val start = raw.indexOf('[', i)
-            if (start < 0) break
-            val end = raw.indexOf(']', start)
-            if (end < 0) break
-            val tag = raw.substring(start + 1, end)
-            val parts = tag.split(':', '.')
-            if (parts.size >= 2) {
-                val min = parts[0].toLongOrNull()
-                val sec = parts[1].toLongOrNull()
-                if (min != null && sec != null) {
-                    val msPart = if (parts.size >= 3) parts[2] else ""
-                    val ms = when (msPart.length) {
-                        0 -> 0L
-                        1 -> msPart.toLong() * 100
-                        2 -> msPart.toLong() * 10
-                        else -> msPart.take(3).toLong()
-                    }
-                    val text = raw.substring(end + 1).substringBefore('[').trim()
-                    result.add(LyricLine(min * 60000 + sec * 1000 + ms, text))
-                }
+        val timeTag = Regex("""\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]""")
+        val wordTag = Regex("""<\d{1,2}:\d{2}(?:[.:]\d{1,3})?>""")
+        val metaTag = Regex("""\[[A-Za-z][^\[\]]*\]""")
+        for (line in raw.split('\n')) {
+            // 1. 剥尖括号词级时间戳（增强LRC：[00:10.00]<00:10.20>你<00:10.40>好 → [00:10.00]你好）
+            var s = line.replace(wordTag, "")
+            // 2. 剥元数据标签（[ti:]/[ar:]/[al:]/[by:] 等字母开头，循环剥到没有为止）
+            var prev: String
+            do {
+                prev = s
+                s = metaTag.replaceFirst(s, "")
+            } while (s != prev)
+            // 3. 找时间标签
+            val tags = timeTag.findAll(s).toList()
+            if (tags.isEmpty()) continue
+            // 4. 切片段：每个标签前的文字归属上一个标签；行尾文字归属最后一个标签
+            data class Frag(val timeMs: Long, val text: String)
+            val frags = mutableListOf<Frag>()
+            var lastTime = -1L
+            var prevEnd = 0
+            for (m in tags) {
+                val text = s.substring(prevEnd, m.range.first).trim()
+                if (text.isNotEmpty() && lastTime >= 0) frags.add(Frag(lastTime, text))
+                lastTime = tagToMs(m.groupValues)
+                prevEnd = m.range.last + 1
             }
-            i = end + 1
+            val tail = s.substring(prevEnd).trim()
+            if (tail.isNotEmpty() && lastTime >= 0) frags.add(Frag(lastTime, tail))
+            if (frags.isEmpty()) continue
+            // 5. 逐字判定：≥4 个短片段（≤4字符且不含空格）→ 合并成整句（取第一个片段时间）
+            if (frags.size >= 4 && frags.all { it.text.length <= 4 && ' ' !in it.text }) {
+                result.add(LyricLine(frags.first().timeMs, frags.joinToString("") { it.text }))
+            } else {
+                for (f in frags) result.add(LyricLine(f.timeMs, f.text))
+            }
         }
-        return result
+        return result.sortedBy { it.timeMs }
+    }
+
+    // [分:秒.毫秒] → 毫秒时间戳；毫秒位 1 位按百分之一秒、2 位按百分之一秒*10 兼容非标准写法
+    private fun tagToMs(g: List<String>): Long {
+        val min = g[1].toLongOrNull() ?: 0L
+        val sec = g[2].toLongOrNull() ?: 0L
+        val msPart = if (g.size >= 4) g[3] else ""
+        val ms = when (msPart.length) {
+            0 -> 0L
+            1 -> msPart.toLong() * 100
+            2 -> msPart.toLong() * 10
+            else -> msPart.take(3).toLong()
+        }
+        return min * 60000 + sec * 1000 + ms
     }
 
     // 歌词正常：显示两行固定歌词（KTV 对角式），隐藏提示

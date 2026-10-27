@@ -376,7 +376,14 @@ object PlayerManager {
                 fresh.prepare()
                 // 逐曲记忆续播：prepare 后立即 seek（Media3 对未 READY 的 seek 会记住待应用）
                 if (startPosMs > 0) fresh.seekTo(startPosMs.toLong())
+                // 冷启动首播静音垫底 + 淡入（水流声修复）：冷启动是唯一没盖硬件起振的路径，
+                // 满音量直出会把 MP3 encoder-delay 伪影 + AudioTrack start 起振瞬态裸奔成
+                // 开头水流声（时有时无正因同一首歌冷启动裸奔、切歌/恢复路径有淡入盖住）。
+                // 与 resumeRestored 自动播放路径对齐：prepareFadeIn 保证 prefill 阶段静音，
+                // play 后 150ms 淡入盖住硬件起振窗口（30~130ms）。
+                dspA.prepareFadeIn()
                 fresh.play()
+                dspA.fadeIn(150)
                 applyAudioFxState()
             } else if (exo.playbackState == Player.STATE_ENDED) {
                 // 自动切歌：上一首已自然播完，没有"播放中硬停"，直接切换即可。

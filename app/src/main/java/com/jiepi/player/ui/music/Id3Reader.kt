@@ -39,6 +39,136 @@ object Id3Reader {
         }
     }
 
+    /**
+     * 读单曲内嵌歌词（MP3 ID3v2 的 USLT 帧 / FLAC·OGG 的 Vorbis Comment LYRICS·UNSYNCEDLYRICS 标签）。
+     * 返回歌词原文（可能带时间轴，也可能纯文本）；没有内嵌歌词/格式不支持/解析失败返回 null。
+     * 同样轻量直读文件头，不创建播放器实例，单首毫秒级。
+     */
+    fun readLyrics(ctx: Context, uri: Uri): String? {
+        return try {
+            val head = readHead(ctx, uri) ?: return null
+            if (head.size < 4) return null
+            when {
+                head[0] == 'I'.code.toByte() && head[1] == 'D'.code.toByte() && head[2] == '3'.code.toByte() ->
+                    parseId3v2Lyrics(head)
+                head[0] == 'f'.code.toByte() && head[1] == 'L'.code.toByte() && head[2] == 'a'.code.toByte() && head[3] == 'C'.code.toByte() ->
+                    parseFlacVorbisLyrics(head)
+                head[0] == 'O'.code.toByte() && head[1] == 'g'.code.toByte() && head[2] == 'g'.code.toByte() && head[3] == 'S'.code.toByte() ->
+                    parseOggVorbisLyrics(head)
+                else -> null
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    // ID3v2 的 USLT 帧：enc(1) + language(3) + content descriptor(00结尾) + 歌词正文
+    private fun parseId3v2Lyrics(head: ByteArray): String? {
+        val major = head[3].toInt() and 0xff
+        // 只支持 v2.3 / v2.4（与 readTitleArtist 一致）
+        if (major != 3 && major != 4) return null
+        val tagSize = synchsafe(head, 6)
+        var p = 10
+        val end = minOf(head.size, 10 + tagSize)
+        while (p + 10 <= end) {
+            val frameId = String(head, p, 4, Charsets.ISO_8859_1)
+            // v2.4 帧大小是 synchsafe；v2.3 是普通大端整数
+            val size = if (major == 4) synchsafe(head, p + 4) else readIntBE(head, p + 4)
+            val frameEnd = p + 10 + size
+            if (frameEnd > end) break
+            if (frameId == "USLT" && size > 5) {
+                val enc = head[p + 10].toInt() and 0xff
+                val dataStart = p + 11
+                val dataEnd = p + 10 + size
+                // 跳过 language(3) + content descriptor（null 结尾；UTF-16 下是 00 00）
+                var q = dataStart + 3
+                q = skipUsltDescriptor(head, q, dataEnd, enc)
+                val lyrics = decodeId3Text(head, q, dataEnd - q, enc)
+                if (lyrics != null && lyrics.isNotBlank()) return lyrics
+            }
+            p = frameEnd
+        }
+        return null
+    }
+
+    // 跳过 USLT 的 content descriptor：单字节编码（0/3）用 1 字节 00，UTF-16（1/2）用 00 00
+    private fun skipUsltDescriptor(bytes: ByteArray, off: Int, limit: Int, enc: Int): Int {
+        var q = off
+        if (enc == 1 || enc == 2) {
+            while (q + 1 < limit) {
+                if (bytes[q] == 0.toByte() && bytes[q + 1] == 0.toByte()) return q + 2
+                q += 2
+            }
+            return limit
+        } else {
+            while (q < limit) {
+                if (bytes[q] == 0.toByte()) return q + 1
+                q++
+            }
+            return limit
+        }
+    }
+
+    private fun parseFlacVorbisLyrics(head: ByteArray): String? {
+        var p = 4 // 跳过 "fLaC"
+        while (p + 4 <= head.size) {
+            val typeByte = head[p].toInt() and 0xff
+            val isLast = (typeByte and 0x80) != 0
+            val type = typeByte and 0x7f
+            val size = readInt24BE(head, p + 1)
+            val dataStart = p + 4
+            if (dataStart + size > head.size) return null
+            if (type == 4) { // VORBIS_COMMENT
+                return parseVorbisCommentValue(head, dataStart, dataStart + size, "LYRICS", "UNSYNCEDLYRICS")
+            }
+            if (isLast) return null
+            p = dataStart + size
+        }
+        return null
+    }
+
+    private fun parseOggVorbisLyrics(head: ByteArray): String? {
+        var p = 4
+        while (p + 6 < head.size) {
+            if ((head[p].toInt() and 0xff) == 0x03 &&
+                head[p + 1] == 'v'.code.toByte() && head[p + 2] == 'o'.code.toByte() &&
+                head[p + 3] == 'r'.code.toByte() && head[p + 4] == 'b'.code.toByte() &&
+                head[p + 5] == 'i'.code.toByte() && head[p + 6] == 's'.code.toByte()
+            ) {
+                return parseVorbisCommentValue(head, p + 7, head.size, "LYRICS", "UNSYNCEDLYRICS")
+            }
+            p++
+        }
+        return null
+    }
+
+    // 在 Vorbis Comment 里取指定键的值（FLAC/OGG 内嵌歌词规范键：LYRICS / UNSYNCEDLYRICS）
+    private fun parseVorbisCommentValue(data: ByteArray, offset: Int, limit: Int, vararg keys: String): String? {
+        var p = offset
+        if (p + 4 > limit) return null
+        val vendorLen = readIntLE(data, p); p += 4
+        if (p + vendorLen > limit) return null
+        p += vendorLen
+        if (p + 4 > limit) return null
+        val count = readIntLE(data, p); p += 4
+        for (i in 0 until count) {
+            if (p + 4 > limit) break
+            val len = readIntLE(data, p); p += 4
+            if (p + len > limit) break
+            val s = String(data, p, len, Charsets.UTF_8)
+            p += len
+            val eq = s.indexOf('=')
+            if (eq > 0) {
+                val key = s.substring(0, eq)
+                if (keys.any { it.equals(key, true) }) {
+                    val value = s.substring(eq + 1)
+                    if (value.isNotBlank()) return value
+                }
+            }
+        }
+        return null
+    }
+
     // ---------- 读取 ----------
 
     private fun readHead(ctx: Context, uri: Uri): ByteArray? {
