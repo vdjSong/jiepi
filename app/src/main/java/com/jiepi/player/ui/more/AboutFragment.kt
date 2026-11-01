@@ -58,7 +58,7 @@ class AboutFragment : Fragment() {
         for (id in ids) {
             requireActivity().findViewById<View>(id)?.visibility = View.GONE
         }
-        // 从"允许安装未知应用"设置页返回后，自动重试拉起安装器
+        // 安装授权页返回后重试拉起安装器
         val f = pendingInstall
         if (f != null) {
             pendingInstall = null
@@ -94,7 +94,7 @@ class AboutFragment : Fragment() {
         val contactRow = MoreUi.infoRowAction(ctx, "联系客服") { toggleContactPanel() }
         addRow(contactRow)
 
-        // QQ 行：仿"开源声明"展开样式——CARD 底色圆角面板内嵌纯文字按钮行（无副描述、无箭头，文字上下居中）
+        // QQ 联系行
         val contactPanel = MoreUi.panelBox(ctx)
         contactPanel.addView(
             MoreUi.plainRow(ctx, "QQ：120826194") {
@@ -102,10 +102,10 @@ class AboutFragment : Fragment() {
             },
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
         )
-        // 抖音行：同一面板内第二个纯文字按钮行
+        // 抖音联系行
         contactPanel.addView(
-            MoreUi.plainRow(ctx, "抖音：dyxSong") {
-                Toast.makeText(ctx, "抖音：dyxSong", Toast.LENGTH_SHORT).show()
+            MoreUi.plainRow(ctx, "抖音：JPlayer") {
+                Toast.makeText(ctx, "联系客服：抖音 JPlayer", Toast.LENGTH_SHORT).show()
             },
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
                 topMargin = MoreUi.dp(ctx, 10)
@@ -120,12 +120,12 @@ class AboutFragment : Fragment() {
     private var moreContactRow: LinearLayout? = null
 
     private fun toggleContactPanel() {
-        // 以面板真实可见性为准，避免标志位与 UI 状态不同步
+        // 按面板可见性判定开关
         val panel = moreContactPanel ?: return
         val row = moreContactRow ?: return
         val opening = panel.visibility != View.VISIBLE
         panel.visibility = if (opening) View.VISIBLE else View.GONE
-        // 箭头旋转与面板真实状态同步：每次以 visibility 重新判定，缓存/重建异常也不会错位
+        // 箭头随面板同步旋转
         MoreUi.rotateArrow(row, opening)
     }
 

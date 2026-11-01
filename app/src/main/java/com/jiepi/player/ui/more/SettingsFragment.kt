@@ -96,11 +96,11 @@ class SettingsFragment : Fragment() {
             findNavController().navigate(R.id.action_settings_to_recycle_bin)
         }))
 
-        // 电池白名单：按厂商直达对应电池/自启动管理页，失败回退系统标准页（无权限需求）
+        // 电池白名单跳转（厂商映射）
         addRow(MoreUi.menuRow(ctx, "电池白名单", "防省电杀进程，自动识别厂商跳转", onClick = { openBatterySettings() }))
     }
 
-    // 跳电池白名单：厂商映射表直达（华为/小米/OPPO/vivo/三星等），失败自动回退系统电池优化页
+    // 厂商映射跳转，失败回退系统页
     private fun openBatterySettings() {
         BatteryWhiteList.open(requireContext())
     }

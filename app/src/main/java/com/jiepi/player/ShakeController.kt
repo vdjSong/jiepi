@@ -25,8 +25,8 @@ class ShakeController(context: Context) : SensorEventListener {
         appContext.getSystemService(Context.SENSOR_SERVICE) as SensorManager
     private var accelerometer: Sensor? = null
 
-    // 防误触参数：加速度矢量模长减去重力(约9.81)后仍超过阈值，才算一次"强晃动"
-    // 阈值档位参考：2.0≈普通甩（模>11.8，对应主流开发者 12 档更灵敏一侧）；2.5 偏用力甩，故下调
+    // 晃动判定（去重力后超阈值）
+    // 阈值档位参考（2.0 普通甩 / 2.5 用力甩）
     private val shakeThreshold = 2.0f   // 阈值：|a| - g > 2.0 m/s²
     private val needStreak = 3          // 连续 3 次采样超阈值才触发一次
     private val cooldownMs = 1500L      // 触发后 1.5s 冷却，防连续误触
@@ -50,7 +50,7 @@ class ShakeController(context: Context) : SensorEventListener {
     }
 
     override fun onSensorChanged(event: SensorEvent?) {
-        // 开关实时读：设置页关掉摇一摇立即不再响应（SharedPreferences 有内存缓存，开销可忽略）
+        // 开关实时读取
         if (!prefs.getBoolean("sw_shake", false)) {
             streak = 0
             return
@@ -78,13 +78,13 @@ class ShakeController(context: Context) : SensorEventListener {
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
     private fun onShake() {
-        // 队列为空不切也不震（PlayerManager.next 内部也会 return，这里前置拦截掉无意义的震动反馈）
+        // 队列为空：不切不震
         if (PlayerManager.songPaths.isEmpty()) return
         PlayerManager.next(appContext)
         vibrate()
     }
 
-    // 摇动成功给一点震动反馈（VIBRATE 权限已在 Manifest 声明；minSdk 34 直接用 VibrationEffect）
+    // 摇动成功震动反馈
     private fun vibrate() {
         try {
             val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {

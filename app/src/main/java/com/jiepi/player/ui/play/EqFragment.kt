@@ -21,7 +21,7 @@ class EqFragment : Fragment() {
     private val binding get() = _binding!!
 
     // 滑块拖动防抖：onProgressChanged 高频触发（一次拖动几十上百次），每次直接
-    // applyAudioFxState 会高频重建 DSP + 高频写盘。合并为 50ms 内一次，松手立即定稿。
+    // 参数合并：50ms 防抖 + 松手定稿
     private var fxApplyPending = false
     private val fxApplyRunnable = Runnable {
         fxApplyPending = false
@@ -57,7 +57,7 @@ class EqFragment : Fragment() {
 
         // 状态栏：全 app 统一黑底白字，MainActivity 已全局设置，这里不再各自保存/恢复
 
-        // 隐藏底部三个悬浮按钮（不挡 EQ 控件）；离开时由详情页/主页自己恢复，这里不管恢复
+        // 隐藏底部悬浮按钮
         hideBottomBar()
 
         // 底部避开系统导航条（手势条/三键），预设按钮不被挡在下面
@@ -183,7 +183,7 @@ class EqFragment : Fragment() {
         }
     }
 
-    // 把底部三个悬浮按钮藏起来（先取消动画，防止反弹结束后通过 withEndAction 重新弹回来）
+    // 隐藏底部悬浮按钮
     private fun hideBottomBar() {
         val ids = listOf(R.id.btnLeft, R.id.floatingActionButton2, R.id.btnRight)
         for (id in ids) {
@@ -193,7 +193,7 @@ class EqFragment : Fragment() {
         }
     }
 
-    // 每次 EQ 页可见都强制隐藏（防旧实例残留、其他逻辑在 viewCreated 之后再把按钮弹回来）
+    // 每次可见强制隐藏
     override fun onResume() {
         super.onResume()
         hideBottomBar()
@@ -201,11 +201,9 @@ class EqFragment : Fragment() {
 
     override fun onDestroyView() {
         super.onDestroyView()
-        // 拖动中直接退出页面：防抖窗口内的最后参数立即定稿，防止 DSP 停在旧参数
+        // 退出时参数定稿（防 DSP 停旧参数）
         flushApplyFx()
-        // 离开 EQ 页：状态栏不恢复（全 app 统一黑底白字，MainActivity 全局兜底）。
-        // 底部按钮不在这里恢复——EQ 页总从播放详情页进来，详情页 view 还活着时应保持隐藏，
-        // 切到歌单/我的页时由它们自己 onResume 拉回
+        // 离开 EQ 页：状态栏不恢复，底部按钮由详情页/主页恢复
         _binding = null
     }
 }

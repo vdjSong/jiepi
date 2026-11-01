@@ -34,7 +34,7 @@ class RecycleBinFragment : Fragment() {
     private val binding get() = _binding!!
 
     // 回收站条目：地址 + 歌名 + 删除时间；
-    // id3Title/id3Artist 冗余存删除时的 ID3，显示/恢复优先用它（旧数据缺字段回退 name）
+    // 冗余存删除时 ID3（缺字段回退 name）
     private data class Entry(
         val path: String,
         val name: String,
@@ -197,7 +197,7 @@ class RecycleBinFragment : Fragment() {
         }
     }
 
-    // 恢复：从回收站移除记录 + 排除表去掉该路径 + 播放队列立即补回这首歌；
+    // 恢复歌曲（移除记录 + 补回队列）
     // 歌曲页返回时会自动重新扫描，恢复的歌自然回列表
     private fun restoreEntry(i: Int) {
         if (i !in entries.indices) return
@@ -207,10 +207,7 @@ class RecycleBinFragment : Fragment() {
         removed.remove(e.path)
         saveRemovedPaths(removed)
         saveEntries()
-        // 播放队列立即补回这首歌（对称删除歌曲时的 removeSongFromQueue）：
-        // 不打断正在播的当前曲，恢复的歌进队尾；播完当前歌后能自然切到它，
-        // 解决"恢复后队列不更新、播完当前歌不切下一首"的问题
-        // （目录/ID3 细节等歌曲页扫描完成由 pushToPlayer 全量补齐）
+        // 播放队列立即补回这首歌（对称 removeSongFromQueue）
         PlayerManager.addSongToQueue(
             e.path,
             e.name,
@@ -218,8 +215,8 @@ class RecycleBinFragment : Fragment() {
             e.id3Title ?: e.name.substringBeforeLast('.'),
             e.id3Artist ?: ""
         )
-        // 顺带通知歌曲页自动刷新（等同一次下拉扫描）：恢复的歌立刻出现在歌曲页列表，
-        // 不用用户手动下拉。歌曲页 view 已销毁时回调为 null，返回歌曲页时本页自动扫描兜底
+        // 通知歌曲页刷新
+        // 歌曲页销毁时返回自动扫描
         MusicFragment.onSongsRestoredExternally?.invoke()
         Toast.makeText(requireContext(), "已恢复：${e.id3Title ?: e.name}（返回歌曲页即可看到）", Toast.LENGTH_SHORT).show()
         buildPage()

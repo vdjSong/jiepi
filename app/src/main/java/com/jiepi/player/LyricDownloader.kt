@@ -14,12 +14,12 @@ import java.util.concurrent.TimeUnit
  * - LRCLIB（lrclib.net）：免费免 key 免登录，按「歌名+歌手」搜索，返回带时间轴 LRC（syncedLyrics）。
  * - LrcApi（api.lrc.cx）：免费免鉴权开源聚合接口，兜底提升中文歌命中率。
  * 全部走 HttpURLConnection（与 UpdateManager 一致，不引第三方网络库）。
- * 请求头 User-Agent 固定为 JPlayer/1.1.9（LRCLIB 官方要求，避免被限流）。
+ * 请求头 User-Agent 为 JPlayer/当前App版本（LRCLIB 官方要求，避免被限流；版本号跟随 BuildConfig.VERSION_NAME 同步）。
  */
 object LyricDownloader {
 
-    private const val UA = "JPlayer/1.1.9"
-    // 单请求超时 8s→5s：双源并发后总耗时≈最慢源，最坏 5s 出头，比原来串行最坏 16s 快很多
+    private val UA = "JPlayer/${BuildConfig.VERSION_NAME}"
+    // 双源并发超时（单请求 5s）
     private const val TIMEOUT_MS = 5000
     // 并发轮询等待比单请求超时略宽（给网络栈一点缓冲）
     private const val WAIT_DEADLINE_MS = 6000L
@@ -58,11 +58,11 @@ object LyricDownloader {
         }
     }
 
-    // 校验是否带时间轴：[分:秒] 或 [分:秒.毫秒]；没有时间标签的歌词播放器没法按进度显示
+    // 校验歌词带时间轴
     private fun hasTimeTag(text: String): Boolean =
         Regex("""\[\d{1,2}:\d{2}""").containsMatchIn(text)
 
-    // LRCLIB：/api/search?q=歌名+歌手，返回 JSON 数组，取第一条 syncedLyrics 非空的
+    // LRCLIB 搜索接口（取 syncedLyrics 非空首条）
     private fun fetchFromLrcLib(artist: String, title: String): String? {
         val q = buildString {
             append(title)

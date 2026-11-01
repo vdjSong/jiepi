@@ -77,8 +77,8 @@ class NeonSlider @JvmOverloads constructor(
     private val trackRect = RectF()
 
     init {
-        // 兼容 XML 里的 android:max / android:progress（与系统 SeekBar 属性同名）
-        // 注：android.R.styleable 非公开 API，改用 getAttributeIntValue 直接读 android 命名空间
+        // 兼容 android:max / android:progress
+        // 用 getAttributeIntValue 读 android 命名空间属性
         if (attrs != null) {
             val androidNs = "http://schemas.android.com/apk/res/android"
             max = attrs.getAttributeIntValue(androidNs, "max", 100)

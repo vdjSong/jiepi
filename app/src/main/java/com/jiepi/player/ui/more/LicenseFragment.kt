@@ -8,6 +8,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.fragment.app.Fragment
 import androidx.navigation.fragment.findNavController
+import com.jiepi.player.BuildConfig
 import com.jiepi.player.R
 import com.jiepi.player.databinding.FragmentLicenseBinding
 import com.jiepi.player.ui.NeonCard
@@ -74,9 +75,7 @@ class LicenseFragment : Fragment() {
         val content = binding.licenseContent
         content.removeAllViews()
 
-        // index 0-3：AndroidX 开源组件汇总（Apache-2.0）/ Rubber Band（GPL-2.0-or-later）/
-        // pinyin4j（GPL-2.0-or-later）/ 洁癖播放器（GPL-3.0）
-        // 版本取自工程 libs.versions.toml / build.gradle.kts。
+        // 开源组件清单（许可取自 libs.versions.toml）
         val entries = listOf(
             LicenseEntry(
                 name = "AndroidX 开源组件（Google）",
@@ -119,9 +118,9 @@ class LicenseFragment : Fragment() {
             ),
             LicenseEntry(
                 name = "洁癖播放器",
-                version = "1.0",
+                version = "v${BuildConfig.VERSION_NAME}",
                 author = "Song • Ma",
-                url = "GitHub（开源发布后公布）",
+                url = "https://github.com/vdjSong/jiepi",
                 license = "GPL-3.0",
                 rawEn = R.raw.license_gpl3,
                 rawZh = R.raw.license_gpl3_zh

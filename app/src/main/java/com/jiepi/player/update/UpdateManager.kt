@@ -141,7 +141,7 @@ object UpdateManager {
                 val dir = File(context.cacheDir, APK_DIR)
                 dir.mkdirs()
                 file = File(dir, "jiepi-update.apk")
-                // 测速排序：所有源先并行试速，从快到慢依次正式下载；任一源成功即停
+                // 测速排序下载（快源优先）
                 for (candidate in speedRankCandidates(downloadCandidates(url))) {
                     var conn: HttpURLConnection? = null
                     try {

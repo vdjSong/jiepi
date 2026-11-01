@@ -45,7 +45,7 @@ class NeonCornerDrawable(
         path.reset()
         path.addRoundRect(rectF, cornerRadius, cornerRadius, Path.Direction.CW)
         paint.strokeWidth = strokeWidth
-        // 整圈扫描渐变：默认紫→蓝→紫三标；colors 非空时按传入色组均匀分布（四色即 0/0.33/0.66/1 闭环）
+        // 整圈扫描渐变（默认紫蓝紫））
         val sweepColors = colors ?: intArrayOf(glowColor, secondColor, glowColor)
         val sweepPositions = FloatArray(sweepColors.size) { i ->
             if (sweepColors.size == 1) 0f else i.toFloat() / (sweepColors.size - 1)

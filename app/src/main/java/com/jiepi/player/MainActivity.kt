@@ -23,7 +23,7 @@ class MainActivity : AppCompatActivity() {
     private var shakeController: ShakeController? = null
 
     // 通知权限申请（Android 13+ 运行时权限）：授权后通知栏才显示播放卡/歌词。
-    // 拒绝不影响播放，只是通知栏卡片不显示，可在"更多 → 权限展示与说明"里了解并去系统设置开启。
+    // 通知栏权限说明入口
     private val notificationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
@@ -49,14 +49,12 @@ class MainActivity : AppCompatActivity() {
         // 更新包安装完成后新版本启动，自动清理缓存的旧安装包
         UpdateManager.cleanCachedApk(this)
 
-        // 状态栏：黑底 + 白色图标（时间、电量、信号都变白），固定黑色风格，深浅模式都一样
+        // 状态栏：黑底白字
         // 注意：浅色主题默认图标是深色，黑底上看不见，必须强制改成白色
         window.statusBarColor = android.graphics.Color.parseColor("#000000")
         WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightStatusBars = false
 
-        // targetSdk 36 强制 edge-to-edge：窗口内容不再自动避让系统栏。
-        // 这里统一监听系统栏 inset，让根布局顶部/底部让出状态栏和导航栏，
-        // 三个悬浮按钮额外叠加导航栏高度，避免和系统导航键撞上。
+        // edge-to-edge：监听系统栏 inset，让出状态栏/导航栏
         ViewCompat.setOnApplyWindowInsetsListener(binding.root) { _, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
 
@@ -76,7 +74,7 @@ class MainActivity : AppCompatActivity() {
 
         val navController = findNavController(R.id.nav_host_fragment_activity_main)
 
-        // 一级页（左/右）切换选项：不叠页、不重复压栈、把中间详情页踢掉、保留自己
+        // 一级页切换（不叠页）
         val navOptionsTop = NavOptions.Builder()
             .setLaunchSingleTop(true)
             .setRestoreState(true)

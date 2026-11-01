@@ -27,8 +27,8 @@ android {
         applicationId = "com.jiepi.player"
         minSdk = 34
         targetSdk = 36
-        versionCode = 10
-        versionName = "1.1.9"
+        versionCode = 11
+        versionName = "1.2.0"
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
         }

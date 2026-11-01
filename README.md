@@ -4,6 +4,16 @@
 
 一款纯本地、无广告、轻量干净的 Android 音乐播放器。
 
+## 界面预览
+
+| 播放详情 | 播放详情 | 播放详情 |
+| --- | --- | --- |
+| ![播放详情](screenshots/play_1.png) | ![播放详情](screenshots/play_2.png) | ![播放详情](screenshots/play_3.png) |
+
+| 播放详情 | 均衡器 | 设置 |
+| --- | --- | --- |
+| ![播放详情](screenshots/play_4.png) | ![均衡器](screenshots/eq.png) | ![设置](screenshots/about.png) |
+
 ## 特性
 
 - **纯本地播放**：只扫描设备本地音乐文件，不联网、无广告、不收集任何数据
@@ -19,7 +29,7 @@
 - 语言：Kotlin
 - 播放内核：Media3 ExoPlayer（1.5.1）
 - 变速变调：Rubber Band（GPL-2.0-or-later）
-- 最低系统：Android 15（minSdk 34）
+- 最低系统：Android 14（minSdk 34）
 
 ## 构建
 

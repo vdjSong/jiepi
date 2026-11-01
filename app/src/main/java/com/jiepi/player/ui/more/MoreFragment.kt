@@ -29,7 +29,7 @@ class MoreFragment : Fragment() {
     private var permissionOpen = false
     private var licenseOpen = false
 
-    // 开源声明四个条目：显示名 / 一句说明 / 声明页序号
+    // 开源声明条目
     private val licenseItems = listOf(
         Triple("AndroidX", "AndroidX 全家桶（Google，含 Media3 等 10 个组件）", 0),
         Triple("rubber band", "音频变速 / 变调处理引擎", 1),
@@ -52,7 +52,7 @@ class MoreFragment : Fragment() {
         buildMenu()
     }
 
-    // 切回本页把底部三悬浮按钮拉回来（二级页会藏，回来必须露）
+    // 回本页拉回底部悬浮按钮
     override fun onResume() {
         super.onResume()
         val ids = listOf(R.id.btnLeft, R.id.floatingActionButton2, R.id.btnRight)
@@ -145,8 +145,7 @@ class MoreFragment : Fragment() {
         morePermissionRow = permissionRow
         moreLicenseRow = licenseRow
 
-        // 每次重建视图都从收起状态开始（从二级页返回时 view 重建、但实例成员会残留，
-        // 不重置会导致折叠标志位与真实 UI 状态不同步，出现"点一次没反应、点两次才展开"）
+        // 重建视图从收起状态开始
         permissionOpen = false
         licenseOpen = false
     }
@@ -157,13 +156,13 @@ class MoreFragment : Fragment() {
     private var moreLicenseRow: LinearLayout? = null
 
     private fun togglePermissionPanel() {
-        // 以面板真实可见性为准，不依赖可能过期的标志位，避免"点一次没反应、点两次才展开"
+        // 按面板可见性判定开关
         val panel = morePermissionPanel ?: return
         val row = morePermissionRow ?: return
         val opening = panel.visibility != View.VISIBLE
         permissionOpen = opening
         panel.visibility = if (opening) View.VISIBLE else View.GONE
-        // 箭头旋转与面板真实状态同步：每次以 visibility 重新判定，缓存/重建异常也不会错位
+        // 箭头随面板同步旋转
         MoreUi.rotateArrow(row, opening)
     }
 

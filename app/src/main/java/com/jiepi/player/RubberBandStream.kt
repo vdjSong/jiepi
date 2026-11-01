@@ -80,7 +80,7 @@ class RubberBandStream(sampleRateIn: Int, numChannelsIn: Int) {
         }
     }
 
-    // ========== JNI（对应 JiepiRubberBandJNI.cpp 导出符号） ==========
+    // JNI（对应 JiepiRubberBandJNI.cpp）
 
     private external fun nativeCreate(sampleRate: Int, channels: Int): Long
     private external fun nativeDestroy(handle: Long)

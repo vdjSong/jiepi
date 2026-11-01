@@ -25,7 +25,7 @@ object MoreUi {
     fun dp(context: Context, value: Int): Int =
         (value * context.resources.displayMetrics.density + 0.5f).toInt()
 
-    // 按压提亮：往白色方向抬，模拟半透明白覆盖在按钮上（与 MusicFragment 同一手感）
+    // 按压提亮
     fun pressLighten(color: Int): Int {
         val r = (((color shr 16) and 0xFF) + 45).coerceAtMost(255)
         val g = (((color shr 8) and 0xFF) + 45).coerceAtMost(255)
@@ -33,9 +33,7 @@ object MoreUi {
         return (0xFF shl 24) or (r shl 16) or (g shl 8) or b
     }
 
-    // 圆角水波纹（全 App 统一标准做法）：
-    // content 传圆角背景（普通态 + 按压提亮态），mask 传同圆角裁剪层，
-    // 波纹被约束在圆角范围内，不再按矩形边界扩散导致四角溢出圆角按钮。
+    // 圆角水波纹（content 圆角背景 + mask 同圆角裁剪）
     fun roundedRipple(context: Context, cornerPx: Float, normalColor: Int): RippleDrawable {
         val bg = StateListDrawable().apply {
             addState(intArrayOf(android.R.attr.state_pressed), GradientDrawable().apply {
@@ -58,17 +56,17 @@ object MoreUi {
         )
     }
 
-    // 霓虹卡片根：深灰圆角 24dp + 整圈四色描边（弹窗/大卡片用）
+    // 霓虹卡片根（深灰圆角 + 四色描边）
     fun neonCardRoot(context: Context): LinearLayout =
         LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
             background = NeonCard.cardBackground(context)
-            // background 赋值会用 drawable 的 padding 覆盖本 padding，必须放在 background 之后
+            // padding 须在 background 之后设置
             setPadding(dp(context, 24), dp(context, 22), dp(context, 24), dp(context, 22))
         }
 
-    // 深灰胶囊按钮（弹窗/页内主按钮），字色由调用方传语义色
+    // 深灰胶囊按钮
     fun neonButton(context: Context, text: String, textColor: Int, onClick: () -> Unit): TextView =
         TextView(context).apply {
             this.text = text
@@ -80,7 +78,7 @@ object MoreUi {
             setOnClickListener { onClick() }
         }
 
-    // 菜单入口行：标题 + 副描述 + 右侧箭头（深灰圆角条，按压提亮）
+    // 菜单入口行（标题 + 副描述 + 箭头）
     fun menuRow(context: Context, title: String, desc: String, onClick: () -> Unit): LinearLayout =
         LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -109,22 +107,17 @@ object MoreUi {
             val arrow = ImageView(context).apply {
                 setImageResource(R.drawable.ic_chevron_right)
                 setColorFilter(NeonCard.SUB)
-                // 图标中心 = View 中心，旋转绕 View 中心即绕图标中心，绝对精确（无字体度量偏移）
             }
-            // 固定正方形尺寸：图标中心 = 容器中心，旋转 pivot 取容器中心即绕图标中心转
+            // 固定尺寸箭头，row.tag 存引用供旋转
             addView(arrow, LinearLayout.LayoutParams(dp(context, 24), dp(context, 24)))
-            // 记录箭头引用：折叠面板类入口用 row.tag 取箭头做旋转动画；非抽屉入口不调用无副作用
+            this.tag = arrow
             this.tag = arrow
         }
 
-    // 抽屉箭头旋转：展开→顺时针旋转 90°（箭头朝下），收起→逆时针转回 0°（箭头朝右）
-    // 旋转中心取箭头自身几何中心（View 默认 pivot 在左上角，直接 rotation 会绕一角转、视觉别扭）；
-    // 动画直接落到目标角度而非递增：即使中途被打断也会停在正确位置；
-    // 调用方每次都以面板真实可见性重新计算 open，箭头状态与抽屉真实状态天然同步，不会错位
+    // 抽屉箭头旋转（展开 90°，收起 0°）
     fun rotateArrow(row: View, open: Boolean) {
         val arrow = row.tag as? View ?: return
-        // 布局可能尚未完成：此刻 width/height 为 0，若直接设 pivotX = 0 会导致旋转仍绕左上角（一角钉住不动）。
-        // post 到下一帧保证拿到真实几何尺寸后，再以几何中心为轴心旋转。
+        // post 取真实几何中心为轴心
         arrow.post {
             val px = arrow.width / 2f
             val py = arrow.height / 2f
@@ -134,7 +127,7 @@ object MoreUi {
         }
     }
 
-    // 抽屉面板：内嵌深灰圆角盒，内容由调用方填充（默认隐藏）
+    // 抽屉面板（深灰圆角盒，默认隐藏）
     fun panelBox(context: Context): LinearLayout =
         LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -146,7 +139,7 @@ object MoreUi {
             visibility = View.GONE
         }
 
-    // 可点击详情行：左标签 + 右侧箭头（关于页"联系客服"用），样式对齐 infoRow（15f 白字、普通字重），带按压提亮与水波纹
+    // 可点击详情行（左标签 + 右箭头）
     fun infoRowAction(context: Context, title: String, onClick: () -> Unit): LinearLayout =
         LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -164,16 +157,14 @@ object MoreUi {
             val arrow = ImageView(context).apply {
                 setImageResource(R.drawable.ic_chevron_right)
                 setColorFilter(NeonCard.SUB)
-                // 图标中心 = View 中心，旋转绕 View 中心即绕图标中心，绝对精确（无字体度量偏移）
             }
-            // 固定正方形尺寸：图标中心 = 容器中心，旋转 pivot 取容器中心即绕图标中心转
+            // 固定尺寸箭头，row.tag 存引用供旋转
             addView(arrow, LinearLayout.LayoutParams(dp(context, 24), dp(context, 24)))
-            // 记录箭头引用：折叠面板类入口用 row.tag 取箭头做旋转动画
+            this.tag = arrow
             this.tag = arrow
         }
 
-    // 面板内纯文字单行按钮：深灰圆角条（BUTTON 色）+ 按压提亮 + 水波纹，左文字上下居中、无副描述无箭头
-    // （联系客服抽屉里的 QQ 行用）
+    // 面板内纯文字单行按钮（联系客服行用）
     fun plainRow(context: Context, label: String, onClick: () -> Unit): LinearLayout =
         LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -236,7 +227,7 @@ object MoreUi {
             }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
 
-    // 开关行：标题 + 副描述 + 右侧霓虹开关（开=霓虹绿圆钮靠右，关=深灰圆钮靠左），整行点击切换
+    // 开关行（标题 + 副描述 + 霓虹开关）
     fun switchRow(
         context: Context,
         title: String,
@@ -250,7 +241,7 @@ object MoreUi {
         val thumbSize = dp(context, 24)
         val gap = dp(context, 3)
 
-        // 轨道：圆角矩形，开=霓虹绿，关=卡片深灰（比行背景深一档，保证关态也有清晰轮廓）
+        // 开关轨道
         val track = View(context).apply {
             background = GradientDrawable().apply {
                 cornerRadius = trackH / 2f
@@ -314,5 +305,5 @@ object MoreUi {
         }
     }
 
-    // 纵向间距统一由调用方内联 LayoutParams 控制（dp 需要 Context，不放静态方法里）
+    // 纵向间距由调用方控制
 }

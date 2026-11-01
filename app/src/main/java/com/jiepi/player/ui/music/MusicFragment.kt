@@ -60,12 +60,14 @@ class MusicFragment : Fragment() {
         private var cachedSongs: List<Song>? = null
         // 磁盘缓存文件名（存在 App 私有目录，不需要任何权限）
         private const val SONGS_CACHE_FILE = "jiepi_songs_cache.json"
+        // 歌词缓存目录名（与 PlayFragment 一致）
+        private const val LRC_CACHE_DIR = "jiepi_lyrics_cache"
         // 外部（回收站恢复歌曲）通知歌曲页自动刷新：由本页面 onViewCreated 赋值、
         // onDestroyView 置空，避免 LocalBroadcast/导航传参等重改，单向最小代价打通
         var onSongsRestoredExternally: (() -> Unit)? = null
     }
 
-    // 一首歌的信息：name 是文件原名（稳定键：歌词匹配/回收站/磁盘缓存定位仍用它），id3 字段用于列表显示
+    // 歌曲信息（name 稳定键，id3 用于显示）
     // 排序与 A-Z 索引改用 displayName（ID3 优先），避免显示与顺序错位
     private data class Song(
         val name: String,
@@ -76,7 +78,7 @@ class MusicFragment : Fragment() {
         val id3Artist: String? = null
     ) {
         // 列表显示名：ID3 歌名优先；缺失回退「去扩展名 + 去掉分隔符」的文件名
-        // 只去符号不丢字：「周杰伦 - 晴天」→「周杰伦 晴天」；不猜哪段是歌手，避免误删歌名
+        // 歌名去符号（不猜歌手段）
         val displayName: String
             get() {
                 val t = id3Title
@@ -95,7 +97,7 @@ class MusicFragment : Fragment() {
         )
     }
 
-    // 批量补读 ID3：轻量解析器单首毫秒级，4 线程并发进一步提速；单首失败回退原条目
+    // 批量补读 ID3（4 线程并发）
     private fun enrichWithId3Parallel(songs: List<Song>, ctx: Context): List<Song> {
         if (songs.isEmpty()) return songs
         val pool = Executors.newFixedThreadPool(4)
@@ -114,7 +116,7 @@ class MusicFragment : Fragment() {
     )
 
     // 回收站里的一首歌：地址 + 歌名 + 删除时间（App 重启不丢，可恢复）；
-    // id3Title/id3Artist 冗余存删除时的 ID3，恢复/显示优先用它（旧数据缺字段回退 name）
+    // 冗余存删除时 ID3（缺字段回退 name）
     private data class RecycleEntry(
         val path: String,
         val name: String,
@@ -134,7 +136,7 @@ class MusicFragment : Fragment() {
     // 当前选中的分类：0=歌曲 1=歌单 2=文件夹
     private var currentCategory = 0
 
-    // 首次扫描是否全量重排：磁盘缓存装载的是旧版按 name 排的序，切 displayName 排序后需迁移一次
+    // 首次扫描全量重排（排序迁移）
     // （进程内缓存 / 已迁移过的场景为 false，保持「只排新歌」的增量性能）
     private var resortFullOnce = true
 
@@ -156,10 +158,10 @@ class MusicFragment : Fragment() {
     // 扫到的全部歌曲（列表顺序 = 全局播放器顺序）
     private var songs = listOf<Song>()
 
-    // 当前播放队列来源：all / playlist / folder（主列表点歌或后台扫描时据此判断是否需要把播放器数组切回全部歌曲）
+    // 播放队列来源（all/playlist/folder）
     private var listSource = "all"
 
-    // 启动自动播放兜底标记：首次启动磁盘无缓存（队列空）时登记，等扫描完成队列就绪后开播第一首
+    // 启动自动播放兜底标记
     private var autoPlayPending = false
 
     // 当前在播的歌单名（listSource=="playlist" 时歌单展开区据此定位高亮行）
@@ -170,7 +172,7 @@ class MusicFragment : Fragment() {
     // 歌单列表（SharedPreferences 里存着，App 重启不丢）
     private var playlists = mutableListOf<Playlist>()
 
-    // 软件内已删除的歌曲地址（普通删除后文件还在，扫描时必须跳过；App 重启不丢）
+    // 已删除歌曲地址（扫描跳过）
     private var removedPaths = mutableSetOf<String>()
 
     // 回收站：被移入回收站的歌曲（地址/歌名/删除时间），可恢复回列表
@@ -187,11 +189,11 @@ class MusicFragment : Fragment() {
     // 主线程 Handler：后台扫描完回主线程刷新界面
     private val handler = Handler(Looper.getMainLooper())
 
-    // 歌曲数据版本：每次扫描完成 +1；歌曲页重建后记下对应版本，切页时版本没变就跳过重建（避免扫描完成刷新与切页刷新连续全量重建）
+    // 歌曲数据版本（版本没变跳过重建）
     private var dataVersion = 0
     private var refreshedSongVersion = -1
 
-    // 切歌回调：播放器切歌时把"正在播放"绿字刷新到新行（只重绘不改位置）
+    // 切歌回调刷新绿字
     private val onSongChangeListener: (Int) -> Unit = { _: Int ->
         handler.post {
             if (!isAdded || _binding == null) return@post
@@ -199,7 +201,7 @@ class MusicFragment : Fragment() {
             if (currentCategory == 0) {
                 (binding.songList.adapter as? SongAdapter)?.notifyDataSetChanged()
             }
-            // 歌单/文件夹展开区：队列来源匹配且正展开时重建展开区，让高亮跟着切歌走（不重建整页）
+            // 展开区随切歌重建高亮
             if (listSource == "playlist" && activePlaylistName != null && expandedPlaylistName == activePlaylistName) {
                 val block = binding.playlistListContainer.findViewWithTag<LinearLayout>(activePlaylistName!!)
                 val container = block?.getChildAt(1) as? LinearLayout
@@ -260,14 +262,14 @@ class MusicFragment : Fragment() {
         return binding.root
     }
 
-    // 页面出来之后：先内存缓存 → 再磁盘缓存 → 都没有就空列表，然后后台扫一遍对齐
+    // 装载顺序：内存→磁盘→空→后台扫描
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
         // 切歌时列表"正在播放"绿字跟着走（onDestroyView 里成对移除）
         PlayerManager.addSongChangeListener(onSongChangeListener)
 
-        // 注册三个分类 tab：点整个区域都算数（不再只点小字），谁选中谁加粗 + 图标/文字变白
+        // 分类 tab 注册（整区可点）
         binding.tabSong.setOnClickListener { selectCategory(0) }
         binding.tabPlaylist.setOnClickListener { selectCategory(1) }
         binding.tabFolder.setOnClickListener { selectCategory(2) }
@@ -336,11 +338,11 @@ class MusicFragment : Fragment() {
             resortFullOnce = true   // 磁盘缓存可能是旧版按 name 排的，首次扫描全量重排迁移
         }
         pushToPlayer()
-        // 冷启动播放记忆恢复：缓存装载完、队列已推全量后再续播（页面重建时 currentIndex 已就位会自动跳过）
+        // 冷启动播放记忆恢复
         restoreResumeIfNeeded()
         refreshList()
-        // 从播放详情页返回时 view 会重建重走这里：此刻歌曲数据已装载完，重新定位到当前播放歌曲
-        // （onViewCreated 里 selectCategory(0) 调用时列表还没装数据，那次的 scrollToPlayingRow 找不到行，必须在这补一次）
+        // 返回时重新定位当前播放歌曲
+        // 补一次定位（列表未装数据时找不到行）
         scrollToPlayingRow()
         scanSongsAsync()
 
@@ -355,12 +357,12 @@ class MusicFragment : Fragment() {
         binding.songSwipe.setDistanceToTriggerSync(dp(90))
         binding.songSwipe.setOnRefreshListener { scanSongsAsync() }
 
-        // 回收站恢复歌曲后自动刷新本页列表（等同一次下拉刷新）：view 存活时生效，
+        // 回收站恢复后刷新列表
         // 页面已销毁时回调为 null，恢复后返回本页 onViewCreated 本来就会扫描，不会漏
         onSongsRestoredExternally = { scanSongsAsync() }
     }
 
-    // 建右侧索引条：每个字母一个 TextView（不自己抢触摸，点击/滑动都由整条条统一处理）
+    // 右侧字母索引条
     private fun initIndexBar() {
         binding.indexBar.removeAllViews()
         for (letter in indexLetters) {
@@ -409,10 +411,10 @@ class MusicFragment : Fragment() {
         if (pos >= 0) binding.songList.setSelection(pos)
     }
 
-    // 进入歌曲列表时定位到当前正在播放的歌曲那一行：目标行放到可视区中间（居中）
-    // 列表头/尾的歌曲不硬居中：滚动边界会自动把它们贴顶/贴底，不会滚出空白
+    // 定位当前播放行（居中）
+    // 头尾歌曲贴边界不居中
     private fun scrollToPlayingRow() {
-        // 只在播放队列是全部歌曲时定位；歌单/文件夹播放中歌曲页不高亮也不滚动（避免按歌单索引错位滚行）
+        // 仅全部歌曲队列定位高亮
         if (listSource != "all") return
         val idx = PlayerManager.currentIndex
         if (idx < 0) return
@@ -454,15 +456,13 @@ class MusicFragment : Fragment() {
         }
     }
 
-    // 后台扫 SAF 文件夹（不卡界面）：批量 query 每层拿整层子项，扫完和旧列表增量对账
-    // 对账规则：还存在的原条目不动（含排序位置）；消失的删掉；新增的单独排序后归并
-    // 排序键统一 displayName（ID3 歌名优先）：首次扫描全量重排一次做迁移，之后只排新歌
+    // 后台扫描 SAF 文件夹（增量对账 + displayName 排序）
     private fun scanSongsAsync() {
         val ctx = requireContext().applicationContext
         val uris = folderUris.toList()
 
         Thread {
-            // 已删除清单快照：removedPaths 可能被主线程并发写（删歌），后台线程只读快照防跨线程读写
+            // 已删除清单快照（防并发写）
             val removedSnapshot = removedPaths.toSet()
             // 最新全集：path -> Song（同一 path 只进一次）
             val latest = LinkedHashMap<String, Song>()
@@ -502,13 +502,12 @@ class MusicFragment : Fragment() {
             }
             // 剩下的 latest 全是新歌
             added.addAll(latest.values)
-            // 首次扫描全量重排 kept：旧磁盘缓存按 name 排的序，切 displayName 后归并前提被破坏，需迁移一次
+            // 首次扫描全量重排（排序迁移）
             if (resortFullOnce) {
                 kept.sortWith(Comparator { a, b -> compareName(a.displayName, b.displayName) })
                 resortFullOnce = false
             }
-            // 新歌/变更歌先批量读 ID3：排序键是 displayName（ID3 优先），必须先拿到 ID3 再排序
-            // 轻量解析器 + 4 线程并行；map 返回只读 List 没有 sortWith，用 sortedWith 直接产出排好序的新列表
+            // 新歌先批量读 ID3（displayName 排序键）
             val enrichedAdded = enrichWithId3Parallel(added, ctx).sortedWith(
                 Comparator { a, b -> compareName(a.displayName, b.displayName) }
             )
@@ -517,26 +516,29 @@ class MusicFragment : Fragment() {
             // 最新集合先写磁盘缓存：纯 IO 挪后台线程，不占主线程（下次启动秒出）
             saveSongsCache(found, ctx)
 
+            // 全盘歌词同步：以用户文件夹 .lrc 为准对账 App 缓存（改则更、删则清）
+            syncLyricsAll(found, ctx, uris)
+
             // 回主线程更新（页面可能已关，先检查再动）
             handler.post {
                 if (!isAdded || _binding == null) return@post
                 songs = found
                 cachedSongs = found
-                // 正在歌单/文件夹上下文播放时：保留当前队列不被扫描重置（否则歌单点歌会被后台扫描打断回全部歌曲）
-                // 全部歌曲上下文才重新推全量；歌单/文件夹队列依赖的 path 未变，旧引用仍可继续播
+                // 歌单/文件夹播放时保留队列
+                // 仅全部歌曲重推全量
                 if (listSource == "all") {
                     pushToPlayer()
                     // 扫描后队列收缩/重排：按实际播放的媒体 path 重定位 currentIndex
                     //（当前歌还在 → 精确指到它；被外部删掉 → 切到原下一首，UI 与实播一致）
                     PlayerManager.realignCurrentIndex(requireContext())
                 }
-                // 启动自动播放兜底：首次启动磁盘无缓存时队列空没法开播，扫描完成队列就绪后接第一首直接响
+                // 启动自动播放兜底（扫描后开播）
                 // （用户已手动点过歌 currentIndex!=-1 或自动播没开时不触发）
                 if (autoPlayPending && PlayerManager.currentIndex == -1 && songs.isNotEmpty()) {
                     autoPlayPending = false
                     PlayerManager.play(0, requireContext())
                 }
-                // 数据版本 +1：歌曲页只在版本变化时重建一次；切页时版本没变就跳过，避免扫描完成刷新与切页刷新连续全量重建
+                // 数据版本 +1（防重复重建）
                 dataVersion++
                 when (currentCategory) {
                     0 -> refreshListIfStale()
@@ -545,10 +547,124 @@ class MusicFragment : Fragment() {
                     // 文件夹页也在：重建行并恢复展开（歌曲集合变了，展开内容跟着变）
                     2 -> refreshFolderList()
                 }
-                // 下拉刷新完成：停止转圈（启动扫描/新加文件夹触发的扫描也会走到这里，无害）
+                // 下拉刷新完成停转圈
                 binding.songSwipe.isRefreshing = false
             }
         }.start()
+    }
+
+    // 全盘歌词同步：以用户文件夹 .lrc 为准对账 App 缓存（后台线程调用）
+    // 对比维度：内容/字节为主；用户文件改则更新缓存，删则清缓存
+    private fun syncLyricsAll(songs: List<Song>, ctx: Context, uris: List<String>) {
+        try {
+            val cacheDir = File(ctx.filesDir, LRC_CACHE_DIR)
+            if (!cacheDir.exists() && !cacheDir.mkdirs()) return
+            // 1. 每个文件夹列出全部 .lrc（含历史 .lrc.txt），base(小写) -> 文档
+            val lrcMap = HashMap<String, Uri>()
+            for (uriStr in uris) {
+                collectFolderLrc(ctx, Uri.parse(uriStr), lrcMap)
+            }
+            // 2. 逐歌对账
+            for (s in songs) {
+                val base = s.name.substringBeforeLast('.').trim().lowercase()
+                if (base.isBlank()) continue
+                val cacheFile = File(cacheDir, lyricCacheName(s.path))
+                val srcFile = File(cacheDir, lyricCacheName(s.path) + ".src")
+                val lrcUri = lrcMap[base]
+                if (lrcUri != null) {
+                    // 用户文件夹有 .lrc：内容与缓存不等则更新（改则更）
+                    val content = readDocumentText(ctx, lrcUri)
+                    if (content != null && content.isNotBlank()) {
+                        val cached = try { if (cacheFile.exists()) cacheFile.readText() else null } catch (e: Exception) { null }
+                        if (cached != content) {
+                            cacheFile.writeText(content)
+                        }
+                        srcFile.writeText("file")
+                    }
+                } else {
+                    // 用户文件夹没有该 .lrc：缓存若来自用户文件则清（删则清）
+                    val src = try { if (srcFile.exists()) srcFile.readText().trim() else "" } catch (e: Exception) { "" }
+                    if (src == "file") {
+                        cacheFile.delete()
+                        srcFile.delete()
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            // 歌词同步失败不致命，下次扫描再试
+        }
+    }
+
+    // 递归收集文件夹里的 .lrc / .lrc.txt（首现保留），base(小写去扩展名) -> 文档 Uri
+    private fun collectFolderLrc(ctx: Context, treeUri: Uri, out: HashMap<String, Uri>) {
+        try {
+            val rootId = DocumentsContract.getTreeDocumentId(treeUri)
+            val queue = ArrayDeque<String>()
+            queue.add(rootId)
+            while (queue.isNotEmpty()) {
+                val dirId = queue.removeFirst()
+                val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, dirId)
+                var cursor: Cursor? = null
+                try {
+                    cursor = ctx.contentResolver.query(
+                        childrenUri,
+                        arrayOf(
+                            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                            DocumentsContract.Document.COLUMN_MIME_TYPE
+                        ),
+                        null, null, null
+                    )
+                    while (cursor != null && cursor.moveToNext()) {
+                        val id = cursor.getString(0)
+                        val name = cursor.getString(1) ?: ""
+                        val mime = cursor.getString(2) ?: ""
+                        if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
+                            queue.add(id)
+                        } else {
+                            val lower = name.lowercase()
+                            val base = when {
+                                lower.endsWith(".lrc") -> lower.removeSuffix(".lrc").trim()
+                                lower.endsWith(".lrc.txt") -> lower.removeSuffix(".lrc.txt").trim()
+                                else -> ""
+                            }
+                            if (base.isNotEmpty() && !out.containsKey(base)) {
+                                out[base] = DocumentsContract.buildDocumentUriUsingTree(treeUri, id)
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    // 某层读失败：跳过该层继续
+                } finally {
+                    cursor?.close()
+                }
+            }
+        } catch (e: Exception) {
+            // 权限异常忽略
+        }
+    }
+
+    // 读 SAF 文档文本（UTF-8，无时间标签则 GBK 兜底）
+    private fun readDocumentText(ctx: Context, uri: Uri): String? {
+        return try {
+            val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return null
+            if (bytes.isEmpty()) return null
+            var text = String(bytes, Charsets.UTF_8)
+            val timeTag = Regex("""\[\d{1,2}:\d{2}""")
+            if (!timeTag.containsMatchIn(text)) {
+                text = String(bytes, java.nio.charset.Charset.forName("GBK"))
+            }
+            text
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    // 歌词缓存名（歌曲地址 MD5，与 PlayFragment 一致）
+    private fun lyricCacheName(songPath: String): String {
+        val digest = java.security.MessageDigest.getInstance("MD5")
+            .digest(songPath.toByteArray(Charsets.UTF_8))
+        return digest.joinToString("") { "%02x".format(it) } + ".lrc"
     }
 
     // 两个有序列表按歌名归并（保留各自顺序，结果仍有序）
@@ -565,7 +681,7 @@ class MusicFragment : Fragment() {
     }
 
     // 批量收集一个 SAF 树里的歌曲（歌名 + 播放地址），子文件夹也翻
-    // 用 DocumentsContract 一层一次 query 拿整层子项，直接读 mime/名字，代替逐文件多次 Binder IPC
+    // DocumentsContract 分层 query（整层子项）
     private fun collectFolderSongsBatch(ctx: Context, treeUri: Uri, out: MutableList<Pair<String, String>>) {
         val rootId = DocumentsContract.getTreeDocumentId(treeUri)
         val queue = ArrayDeque<String>()
@@ -608,7 +724,7 @@ class MusicFragment : Fragment() {
     }
 
     // 把最新歌曲集合写进 App 私有目录（不需要任何权限）
-    // ctx 显式传入：本函数可能被后台线程调用（扫描完成时写缓存不占主线程），不能依赖 requireContext()
+    // ctx 显式传入（后台线程调用）
     private fun saveSongsCache(list: List<Song>, ctx: Context) {
         try {
             val arr = JSONArray()
@@ -656,7 +772,7 @@ class MusicFragment : Fragment() {
         }
     }
 
-    // 把歌曲清单交给全局播放器（切页面它还记得；文件夹地址一起带上，播放页找歌词用）
+    // 歌曲清单交给全局播放器
     private fun pushToPlayer() {
         PlayerManager.songNames = songs.map { it.name }.toMutableList()
         PlayerManager.songPaths = songs.map { it.path }.toMutableList()
@@ -667,30 +783,28 @@ class MusicFragment : Fragment() {
         PlayerManager.notifyQueueChanged()
     }
 
-    // ========== 冷启动开播编排：播放记忆恢复 + 启动自动播放（数据存取在 PlayerManager，编排在这里） ==========
-    // 只在冷启动未播过时处理（currentIndex==-1）；从播放页返回等页面重建时已播过，跳过
-    // 自动播与记忆严格分离：记忆=恢复队列+位置但停在暂停；自动播=开播（记忆能接就接上次位置，接不上播全量第一首）
+    // 冷启动开播编排（记忆恢复 + 自动播放）
     private fun restoreResumeIfNeeded() {
         if (PlayerManager.currentIndex != -1) return
         val ctx = requireContext()
         val autoPlay = PlayerManager.isAutoPlayEnabled(ctx)
         val resumeData = PlayerManager.loadResume(ctx)
 
-        // 启动自动播放兜底：首次启动磁盘无缓存（songs 空）时开播没得放，登记等扫描完成再播
+        // 自动播放兜底（扫描后再播）
         if (autoPlay && songs.isEmpty()) {
             autoPlayPending = true
             return
         }
         autoPlayPending = false
 
-        // 记忆不可用（无记录 / 记忆开关关）：自动播开就直接播全量第一首，关则什么都不做
+        // 记忆不可用：自动播开则播第一首
         if (resumeData == null || !PlayerManager.isResumeEnabled(ctx)) {
             if (autoPlay) PlayerManager.play(0, ctx)
             return
         }
         val data = resumeData
 
-        // 来源失效（歌单/文件夹已被删）：兜底回全部歌曲队列；自动播开时接第一首直接响
+        // 来源失效：回全部歌曲队列
         val sourceOk = when (data.source) {
             "playlist" -> data.playlistName != null && playlists.any { it.name == data.playlistName }
             "folder" -> data.folderUri != null && folderUris.contains(data.folderUri)
@@ -711,7 +825,7 @@ class MusicFragment : Fragment() {
             // 全部歌曲：队列就是当前全量（pushToPlayer 已推），按 path 定位续播
             var idx = songs.indexOfFirst { it.path == data.currentPath }
             if (idx < 0) {
-                // 当前曲目失效：向后找首个可播（绕回队头继续找）；整队失效则队列已是全量，自动播开时接第一首
+                // 当前曲失效：向后找可播
                 val startIdx = data.currentIndex.coerceIn(0, data.queue.lastIndex)
                 val rest = data.queue.drop(startIdx + 1) + data.queue.take(startIdx + 1)
                 val fallback = rest.firstOrNull { it in allPaths }
@@ -726,7 +840,7 @@ class MusicFragment : Fragment() {
             return
         }
 
-        // 歌单/文件夹：从保存队列里过滤还活着的歌（保持上次播放顺序），重建队列
+        // 歌单/文件夹重建队列（过滤存活）
         val alive = data.queue.filter { it in allPaths }
         if (alive.isEmpty()) {
             // 整队失效：兜底回全部歌曲队列；自动播开时接第一首直接响
@@ -769,7 +883,7 @@ class MusicFragment : Fragment() {
         PlayerManager.resumeRestored(playIndex, data.position, ctx, autoPlay)
     }
 
-    // 把当前队列来源同步给播放器（播放记忆保存时要知道队列是 all/歌单/文件夹）
+    // 队列来源同步给播放器
     private fun syncResumeSource() {
         PlayerManager.resumeSource = listSource
         PlayerManager.resumePlaylistName = activePlaylistName
@@ -845,7 +959,7 @@ class MusicFragment : Fragment() {
     }
 
     // 按当前分类生成显示用的行（只有歌曲页需要）
-    // 歌曲页永远显示全部歌曲；歌单/文件夹有自己的展开显示区，不替换这里的列表
+    // 歌曲页固定显示全部歌曲
     private fun buildRows(): List<Row> {
         val base = songs
         if (base.isEmpty()) {
@@ -858,7 +972,7 @@ class MusicFragment : Fragment() {
         return rows
     }
 
-    // 歌曲页刷新：数据版本没变时跳过重建（扫描完成已刷过、切页又触发时不再重复全量重建）
+    // 歌曲页刷新（版本没变跳过）
     private fun refreshListIfStale() {
         if (refreshedSongVersion != dataVersion) {
             refreshList()
@@ -872,7 +986,7 @@ class MusicFragment : Fragment() {
         val savedPos = binding.songList.firstVisiblePosition
         currentRows = buildRows()
         binding.songList.adapter = SongAdapter(currentRows)
-        // 空态：只在歌曲页且没有歌曲时显示独立空提示（图标+文字），否则隐藏（防串门到歌单/文件夹页）
+        // 空态提示（仅歌曲页）
         binding.songEmpty.visibility =
             if (currentCategory == 0 && songs.isEmpty()) View.VISIBLE else View.GONE
         if (currentRows.isNotEmpty()) {
@@ -883,7 +997,7 @@ class MusicFragment : Fragment() {
         // 点歌：歌曲行点一下交给全局播放器（带 context，SAF 的歌才能播）
         binding.songList.setOnItemClickListener { _, _, position, _ ->
             if (listSource != "all") {
-                // 播放器队列当前是歌单/文件夹内容：主列表点歌需先把播放器数组切回全部歌曲，
+                // 主列表点歌前切回全部歌曲队列
                 // 再用同一 position 重新取行（新行 songIndex 才是全部歌曲索引），避免索引错位
                 listSource = "all"
                 activePlaylistName = null
@@ -892,10 +1006,7 @@ class MusicFragment : Fragment() {
             }
             val row = currentRows.getOrNull(position) ?: return@setOnItemClickListener
             if (!row.isHeader && row.songIndex in songs.indices) {
-                // 逐曲记忆：受播放记忆开关约束——开关开着才读位置续播（>3 秒才续，防止残留
-                // 一两秒无意义跳转）；开关关掉按老样子从头放。位置并入 play()：切歌走交叉
-                // 淡入时 activePlayer 尚未切到新实例，外部 seekTo 会打在旧歌上，必须由
-                // play 内部对真正目标实例 seek
+                // 逐曲记忆（开关约束，>3s 续播）
                 val trackPos = if (PlayerManager.isResumeEnabled(requireContext()))
                     PlayerManager.readTrackPosition(requireContext(), songs[row.songIndex].path) else 0
                 PlayerManager.play(row.songIndex, requireContext(), if (trackPos > 3000) trackPos else 0)
@@ -919,7 +1030,7 @@ class MusicFragment : Fragment() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
             background = NeonCard.cardBackground(requireContext())
-            // 关键：background 赋值会用 drawable 的 padding 覆盖本 padding，必须放在 background 之后设置
+            // padding 须在 background 之后设置
             setPadding(dp(24), dp(22), dp(24), dp(22))
         }
 
@@ -993,7 +1104,7 @@ class MusicFragment : Fragment() {
             .let { styleDialog(it) }
     }
 
-    // 移入回收站：记回收站条目 + 软件内同步移除（列表/缓存/歌单/播放器队列/排除表）
+    // 移入回收站（同步移除各处）
     private fun doDeleteSong(song: Song) {
         addToRecycleBin(song)
         removeSongFromSoftware(song)
@@ -1004,7 +1115,7 @@ class MusicFragment : Fragment() {
         ).show()
     }
 
-    // 从软件各处移除一首歌：歌曲列表 / 磁盘缓存 / 所有歌单 / 播放器列表 / 排除表
+    // 从软件各处移除歌曲
     private fun removeSongFromSoftware(song: Song) {
         removedPaths.add(song.path)
         saveRemovedPaths()
@@ -1016,15 +1127,13 @@ class MusicFragment : Fragment() {
         }
         savePlaylists()
         // 播放器队列同步：全部歌曲上下文整体重推（删除+排序变更一起生效）；
-        // 歌单/文件夹上下文只剔除这一首，不把当前队列悄悄切成全部歌曲（否则正在播的歌单/文件夹被打断）
+        // 歌单/文件夹仅剔除该曲
         if (listSource == "all") {
             pushToPlayer()
         } else {
             PlayerManager.removeSongFromQueue(song.path)
         }
-        // 删除后按实际播放的媒体 path 重定位 currentIndex：
-        // 删的是当前播放曲 → 自动切到新队列原位置（原下一首，交叉淡入无爆音），UI 与实播一致；
-        // 删的是别首 → 精确指到仍在播的那首（顺带修正下标前移）
+        // 删除后重定位 currentIndex（按实际媒体 path）
         PlayerManager.realignCurrentIndex(requireContext())
         refreshList()
         if (currentCategory == 1) refreshPlaylistPage()
@@ -1128,7 +1237,7 @@ class MusicFragment : Fragment() {
         styleDialog(dialog)
     }
 
-    // 恢复勾选的歌：从回收站移除记录，从排除表去掉该路径，重新扫描让它回列表
+    // 恢复勾选歌曲（重扫回列表）
     private fun restoreFromRecycleBin(indices: List<Int>) {
         for (i in indices.sortedDescending()) {
             val e = recycleBin.removeAt(i)
@@ -1203,9 +1312,9 @@ class MusicFragment : Fragment() {
         binding.songEmpty.visibility =
             if (category == 0 && songs.isEmpty()) View.VISIBLE else View.GONE
 
-        // 切到歌曲页才刷新歌曲列表（数据版本没变则跳过重建，与扫描完成刷新去重）；切到歌单页刷新歌单列表；切到文件夹页刷新文件夹列表
+        // 按页签刷新列表（版本去重）
         if (category == 0) refreshListIfStale()
-        // 切到歌曲页时定位到当前播放歌曲；必须在刷新之后调用，覆盖其恢复的旧位置（跳过重建时 adapter 位置本来就对，调用无害）
+        // 切歌曲页定位当前播放行
         if (category == 0) scrollToPlayingRow()
         if (category == 1) refreshPlaylistPage()
         if (category == 2) refreshFolderList()
@@ -1296,7 +1405,7 @@ class MusicFragment : Fragment() {
     }
 
     // 编辑歌单（歌单行三点按钮）：改歌单名，空名/重名不收
-    // 自绘霓虹卡片 + 输入框限宽 280dp（与新建歌单同款），修掉系统 AlertDialog 输入框超宽的老毛病
+    // 自绘霓虹卡片 + 输入框限宽
     private fun showRenamePlaylistDialog(p: Playlist) {
         val dialog = Dialog(requireContext())
         dialog.setCanceledOnTouchOutside(true)
@@ -1328,7 +1437,7 @@ class MusicFragment : Fragment() {
             topMargin = dp(4)
         })
 
-        // 输入框：预填当前歌单名、光标落末尾；白字 + 灰提示字 + 圆角深灰底；宽度限死在 280dp 卡片宽内
+        // 输入框样式（预填歌单名）
         val input = EditText(requireContext()).apply {
             setText(p.name)
             setSelection(p.name.length)
@@ -1408,7 +1517,7 @@ class MusicFragment : Fragment() {
             topMargin = dp(4)
         })
 
-        // 输入框：白字 + 灰提示字 + 圆角深灰底；宽度限死在 280dp 卡片宽内，两头不超霓虹线
+        // 输入框样式（限宽 280dp）
         val input = EditText(requireContext()).apply {
             hint = "歌单名字"
             setTextColor(NeonCard.WHITE)
@@ -1451,7 +1560,7 @@ class MusicFragment : Fragment() {
         dialog.show()
     }
 
-    // 删除歌单：弹多选框，勾选要删的，确定就删（歌单里装的歌只是退出歌单，原文件不动）
+    // 删除歌单（歌不删文件）
     private fun showDeletePlaylistDialog() {
         if (playlists.isEmpty()) {
             Toast.makeText(requireContext(), "还没有歌单可以删除", Toast.LENGTH_SHORT).show()
@@ -1550,7 +1659,7 @@ class MusicFragment : Fragment() {
         dialog.show()
     }
 
-    // 歌单三点菜单：居中圆角卡片（样式仿歌曲三点菜单），重命名 / 添加歌曲 / 移除歌曲
+    // 歌单三点菜单
     private fun showPlaylistMenu(p: Playlist) {
         val dialog = Dialog(requireContext())
         dialog.setCanceledOnTouchOutside(true)
@@ -1561,8 +1670,7 @@ class MusicFragment : Fragment() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
             background = NeonCard.cardBackground(requireContext())
-            // background 赋值会用 drawable 的 padding(InsetDrawable 的 2dp)覆盖本 padding，
-            // 必须放在 background 之后设置，否则卡片内边距被压成 2dp、整体显小
+            // padding 须在 background 之后设置
             setPadding(dp(24), dp(22), dp(24), dp(22))
         }
 
@@ -1655,7 +1763,7 @@ class MusicFragment : Fragment() {
                 }
             )
 
-            // 歌单行：深灰圆角卡片（和文件夹行一个风格），左边名字，中间歌曲数，右边状态
+            // 歌单行卡片
             val header = LinearLayout(requireContext()).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -1755,7 +1863,7 @@ class MusicFragment : Fragment() {
         val container = block.getChildAt(1) as? LinearLayout ?: return
         container.removeAllViews()
         container.visibility = View.GONE
-        // 歌单行结构固定：child[0]=名字，child[1]=歌曲数，child[2]=三点按钮，child[3]=状态图标
+        // 歌单行结构（名字/歌曲数/三点/状态图标）
         (header.getChildAt(3) as? TextView)?.text = "▸"
     }
 
@@ -1768,14 +1876,14 @@ class MusicFragment : Fragment() {
 
         fillPlaylistSongs(p, container)
         container.visibility = View.VISIBLE
-        // 歌单行结构固定：child[0]=名字，child[1]=歌曲数，child[2]=三点按钮，child[3]=状态图标
+        // 歌单行结构（名字/歌曲数/三点/状态图标）
         (header.getChildAt(3) as? TextView)?.text = "▾"
     }
 
-    // 把歌单里的歌逐行塞进容器（白字、缩进，点一下直接播；找不到的歌灰显不可点）
+    // 歌单歌曲行（白字可点播）
     private fun fillPlaylistSongs(p: Playlist, container: LinearLayout) {
         container.removeAllViews()
-        // 当前队列是否就是这个歌单：是则把正在播的那一行染绿（用 path 比对，避免索引错位）
+        // 在播行染绿（path 比对）
         val playingPath = if (listSource == "playlist" && activePlaylistName == p.name)
             PlayerManager.songPaths.getOrNull(PlayerManager.currentIndex) else null
         if (p.songs.isEmpty()) {
@@ -1790,7 +1898,7 @@ class MusicFragment : Fragment() {
         }
         p.songs.forEachIndexed { index, path ->
             val song = songs.find { it.path == path }
-            // 行结构：歌名 + 歌手副行（与主列表一致；找不到的歌只有灰显歌名、不可点）
+            // 行结构：歌名 + 歌手副行
             val row = LinearLayout(requireContext()).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(40), dp(14), dp(24), dp(14))
@@ -1798,7 +1906,7 @@ class MusicFragment : Fragment() {
             val tv = TextView(requireContext()).apply {
                 text = song?.displayName ?: playlistSongName(path)
                 textSize = 16f
-                // 正在播的这一首染绿；还能找到的歌白字可点；找不到的（被删了）灰字不可点
+                // 在播染绿，丢失灰显
                 setTextColor(
                     when {
                         song != null && song.path == playingPath -> NeonCard.GREEN
@@ -1809,7 +1917,7 @@ class MusicFragment : Fragment() {
             }
             row.addView(tv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
             if (song != null) {
-                // 歌手副标题：有歌手显示歌手，读不到固定「未知歌手」占位，行高排版统一
+                // 歌手副标题（缺失显示未知歌手）
                 val artistTv = TextView(requireContext()).apply {
                     text = if (!song.id3Artist.isNullOrBlank()) song.id3Artist else "未知歌手"
                     textSize = 12f
@@ -1828,7 +1936,7 @@ class MusicFragment : Fragment() {
         }
     }
 
-    // 歌还在缓存里找得到就显示歌名；找不到了（歌曲被删）就拿地址最后一段顶一下
+    // 丢失歌曲显示地址末段
     private fun playlistSongName(path: String): String {
         val last = Uri.parse(path).lastPathSegment ?: path
         return try {
@@ -1848,25 +1956,22 @@ class MusicFragment : Fragment() {
         val targetPath = p.songs[index]
         val playIndex = list.indexOfFirst { it.path == targetPath }
         if (playIndex < 0) return
-        // 五数组全部替换为歌单内容（与 pushToPlayer/fillFolderSongs 保持一致，ID3 显示才能对齐）
+        // 五数组替换为歌单内容（与 pushToPlayer 一致）
         PlayerManager.songNames = list.map { it.name }.toMutableList()
         PlayerManager.songPaths = list.map { it.path }.toMutableList()
         PlayerManager.songDirs = list.map { it.dirPath }.toMutableList()
         PlayerManager.id3Titles = list.map { it.displayName }.toMutableList()
         PlayerManager.id3Artists = list.map { it.id3Artist ?: "" }.toMutableList()
-        // 只标记队列来源与在播歌单，不替换歌曲页列表：歌单在歌单 tab 有自己的展开显示区，全部歌曲列表保持不动
+        // 仅标记队列来源与在播歌单
         listSource = "playlist"
         activePlaylistName = p.name
         activeFolderUri = null
         syncResumeSource()
-        // 逐曲记忆：受播放记忆开关约束——开关开着才读位置续播（>3 秒才续，防止残留
-        // 一两秒无意义跳转）；开关关掉按老样子从头放。位置并入 play()：切歌走交叉
-        // 淡入时 activePlayer 尚未切到新实例，外部 seekTo 会打在旧歌上，必须由
-        // play 内部对真正目标实例 seek
+        // 逐曲记忆（开关约束，>3s 续播）
         val trackPos = if (PlayerManager.isResumeEnabled(requireContext()))
             PlayerManager.readTrackPosition(requireContext(), targetPath) else 0
         PlayerManager.play(playIndex, requireContext(), if (trackPos > 3000) trackPos else 0)
-        // 重建歌单页（保持展开）：把正在播的那一行刷成绿色高亮
+        // 重建歌单页（保持展开 + 在播高亮）
         refreshPlaylistPage()
         Toast.makeText(requireContext(), "正在播放：${list[playIndex].displayName}", Toast.LENGTH_SHORT).show()
     }
@@ -1908,7 +2013,7 @@ class MusicFragment : Fragment() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
             background = NeonCard.cardBackground(requireContext())
-            // background 赋值会用 drawable 的 padding 覆盖本 padding，必须放在 background 之后
+            // padding 须在 background 之后设置
             setPadding(dp(24), dp(22), dp(24), dp(22))
         }
     }
@@ -1926,7 +2031,7 @@ class MusicFragment : Fragment() {
         }
     }
 
-    // B 入口：歌单展开后点"添加歌曲"，自绘霓虹卡片多选（无勾选框，点歌名选中染绿，再点取消）
+    // 添加歌曲多选卡片
     private fun showPickSongsDialog(playlistName: String) {
         val p = playlists.find { it.name == playlistName } ?: return
         // 只列还没加进这个歌单的歌（已加的不用再选）
@@ -2051,7 +2156,7 @@ class MusicFragment : Fragment() {
         Toast.makeText(requireContext(), "已从「${p.name}」移除", Toast.LENGTH_SHORT).show()
     }
 
-    // B 入口：歌单展开后点"移除歌曲"，自绘霓虹卡片多选（无勾选框，点歌名选中染红，再点取消）
+    // 移除歌曲多选卡片
     private fun showRemoveSongsDialog(playlistName: String) {
         val p = playlists.find { it.name == playlistName } ?: return
         if (p.songs.isEmpty()) {
@@ -2192,7 +2297,7 @@ class MusicFragment : Fragment() {
         return doc?.name ?: uri.lastPathSegment ?: uriStr
     }
 
-    // 删除文件夹：自绘霓虹卡片多选（无勾选框，点文件夹名选中染红 #FF9A8A，再点取消）
+    // 删除文件夹多选卡片
     private fun showDeleteFolderDialog() {
         if (folderUris.isEmpty()) {
             Toast.makeText(requireContext(), "还没有文件夹可以删除", Toast.LENGTH_SHORT).show()
@@ -2278,8 +2383,8 @@ class MusicFragment : Fragment() {
                     folderUris.removeAll(toDelete)
                     saveFolders()
                     refreshFolderList()
-                    // 立即同步播放队列：被删文件夹里的歌马上从队列移除（不等后台扫描）
-                    // 正在播的歌在里面 → realign 立刻停播/切走，不会继续放"已不存在的文件夹"的歌
+                    // 同步移除队列（不等扫描）
+                    // 在播歌被删则立刻切走
                     val deletedSet = toDelete.toSet()
                     for (i in PlayerManager.songPaths.indices.reversed()) {
                         if (PlayerManager.songDirs.getOrNull(i) in deletedSet) {
@@ -2300,7 +2405,7 @@ class MusicFragment : Fragment() {
         dialog.show()
     }
 
-    // 刷新文件夹页：清空重建"文件夹块"（深灰圆角行 + 底下可展开的歌曲容器）
+    // 刷新文件夹页
     private fun refreshFolderList() {
         // 重建前记住外层 ScrollView 滚动位置，避免后台扫描完成刷新把页面弹回顶部
         val scrollView = binding.folderListContainer.parent as? ScrollView
@@ -2329,7 +2434,7 @@ class MusicFragment : Fragment() {
                 }
             )
 
-            // 文件夹行：深灰圆角卡片（和黑底歌曲区分），左边名字，右边展开/收起图标
+            // 文件夹行卡片
             val header = LinearLayout(requireContext()).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -2354,7 +2459,7 @@ class MusicFragment : Fragment() {
                 LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             )
 
-            // 状态图标：▸=收起 ▾=展开（图标做出来之前先占位）
+            // 状态图标：▸ 收起 / ▾ 展开
             val stateTv = TextView(requireContext()).apply {
                 text = if (expandedFolderUri == uriStr) "▾" else "▸"
                 textSize = 16f
@@ -2370,7 +2475,7 @@ class MusicFragment : Fragment() {
             }
             block.addView(songContainer)
 
-            // 如果这个文件夹本来展开着（比如刚扫完歌列表刷新）：恢复展开，歌也重新填
+            // 恢复原展开状态
             if (expandedFolderUri == uriStr) {
                 fillFolderSongs(songs.filter { it.dirPath == uriStr }, songContainer, uriStr)
                 songContainer.visibility = View.VISIBLE
@@ -2427,10 +2532,10 @@ class MusicFragment : Fragment() {
         (header.getChildAt(1) as? TextView)?.text = "▾"
     }
 
-    // 把文件夹的歌逐行塞进容器（白字、缩进，点一下直接播；长按可加入歌单）
+    // 文件夹歌曲行（可播可加歌单）
     private fun fillFolderSongs(folderSongs: List<Song>, container: LinearLayout, uriStr: String) {
         container.removeAllViews()
-        // 当前队列是否就是这个文件夹：是则把正在播的那一行染绿（用 path 比对，避免索引错位）
+        // 在播行染绿（path 比对）
         val playingPath = if (listSource == "folder" && activeFolderUri == uriStr)
             PlayerManager.songPaths.getOrNull(PlayerManager.currentIndex) else null
         folderSongs.forEachIndexed { index, song ->
@@ -2447,19 +2552,16 @@ class MusicFragment : Fragment() {
                     PlayerManager.songDirs = folderSongs.map { it.dirPath }.toMutableList()
                     PlayerManager.id3Titles = folderSongs.map { it.displayName }.toMutableList()
                     PlayerManager.id3Artists = folderSongs.map { it.id3Artist ?: "" }.toMutableList()
-                    // 只标记队列来源与在播文件夹，不替换歌曲页列表：文件夹有自己的展开显示区，全部歌曲列表保持不动
+                    // 仅标记队列来源与在播文件夹
                     listSource = "folder"
                     activeFolderUri = uriStr
                     activePlaylistName = null
                     syncResumeSource()
-                    // 逐曲记忆：受播放记忆开关约束——开关开着才读位置续播（>3 秒才续，防止
-                    // 残留一两秒无意义跳转）；开关关掉按老样子从头放。位置并入 play()：切歌
-                    // 走交叉淡入时 activePlayer 尚未切到新实例，外部 seekTo 会打在旧歌上，
-                    // 必须由 play 内部对真正目标实例 seek
+                    // 逐曲记忆（开关约束，>3s 续播）
                     val trackPos = if (PlayerManager.isResumeEnabled(requireContext()))
                         PlayerManager.readTrackPosition(requireContext(), song.path) else 0
                     PlayerManager.play(index, requireContext(), if (trackPos > 3000) trackPos else 0)
-                    // 重建文件夹页（保持展开）：把正在播的那一行刷成绿色高亮
+                    // 重建文件夹页（保持展开 + 在播高亮）
                     refreshFolderList()
                     Toast.makeText(requireContext(), "正在播放：${song.displayName}", Toast.LENGTH_SHORT).show()
                 }
@@ -2473,10 +2575,10 @@ class MusicFragment : Fragment() {
         }
     }
 
-    // 歌曲行缓存：歌名 + 歌手副行 + 三点按钮（convertView 复用时直接取，不用再 findViewById）
+    // 歌曲行缓存（convertView 复用）
     private class RowHolder(val nameTv: TextView, val artistTv: TextView, val moreBtn: ImageView)
 
-    // 歌曲列表适配器：歌名白字 + 右侧竖排三点按钮（黑底白字，和播放页一个风格）
+    // 歌曲列表适配器
     private inner class SongAdapter(private val rows: List<Row>) : BaseAdapter() {
 
         override fun getCount(): Int = rows.size
@@ -2543,12 +2645,10 @@ class MusicFragment : Fragment() {
                 moreBtn = h?.moreBtn
             }
             nameTv?.text = row.text
-            // 歌手副标题：有歌手显示歌手，读不到固定「未知歌手」占位，不隐藏、保持行高排版统一
+            // 歌手副标题（缺失显示未知歌手）
             artistTv?.text = if (!row.artist.isNullOrBlank()) row.artist else "未知歌手"
             artistTv?.visibility = View.VISIBLE
-            // 正在播放的那一行：文字用 Spotify 绿（#1ED760）区分，其余保持柔和白（#E0E0E0）
-            // 只有队列来源是全部歌曲时才在歌曲页按 currentIndex 高亮；歌单/文件夹播放中全部歌曲列表不高亮
-            // 放公共位置：convertView 复用时也要跟着当前播放行重新上色
+            // 在播行染绿（convertView 复用时上色）
             val isPlayingRow = !row.isHeader && row.songIndex >= 0 && listSource == "all" && row.songIndex == PlayerManager.currentIndex
             nameTv?.setTextColor(if (isPlayingRow) NeonCard.GREEN else NeonCard.WHITE)
             if (row.songIndex in songs.indices) {
@@ -2564,7 +2664,7 @@ class MusicFragment : Fragment() {
 
     // 把系统弹窗改成黑底白字，跟播放器界面一个风格
     private fun styleDialog(dialog: AlertDialog) {
-        // 弹窗背景：深灰 #2C2C2E 圆角 24dp 卡片 + 整圈霓虹四色描边（与三点菜单/自绘弹窗同一套）
+        // 弹窗霓虹卡片背景
         dialog.window?.setBackgroundDrawable(NeonCard.cardBackground(requireContext()))
         // 等弹窗内容摆好，再把所有文字统一变白
         dialog.window?.decorView?.post {
@@ -2573,7 +2673,7 @@ class MusicFragment : Fragment() {
         }
     }
 
-    // 递归找弹窗里所有文字：标题/内容/按钮全变白；输入框再配深灰底；勾选框（含 CheckedTextView 勾框）白框白勾
+    // 弹窗文字统一样式
     private fun applyDialogTextColor(view: View) {
         when (view) {
             // 输入框：白字 + 灰提示字 + 圆角深灰底（新建歌单那个输入框）
@@ -2582,15 +2682,14 @@ class MusicFragment : Fragment() {
                 view.setHintTextColor(NeonCard.SUB)
                 view.setBackgroundResource(R.drawable.bg_input_rounded)
             }
-            // 勾选框（添加歌曲/删除歌单等多选框）：框和勾都染白，去掉绿色填充，只留干净白勾
+            // 勾选框染白
             is android.widget.CompoundButton -> {
                 view.setTextColor(NeonCard.WHITE)
                 // 整个勾选框的色调 = 白色（框白、勾白、没有绿色填充）
                 view.buttonTintList =
                     android.content.res.ColorStateList.valueOf(NeonCard.WHITE)
             }
-            // 多选列表项（setMultiChoiceItems 的 CheckedTextView）：文字染白，勾框图形也染白
-            // 注意：CheckedTextView 是 TextView 子类，必须放在 TextView 分支之前
+            // 多选列表项染白（文字 + 勾框）
             is android.widget.CheckedTextView -> {
                 view.setTextColor(NeonCard.WHITE)
                 view.checkMarkTintList =
@@ -2622,11 +2721,8 @@ class MusicFragment : Fragment() {
     // dp 转像素
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
-    // 页面重新可见（从详情页返回/后台回前台）：把底部三按钮拉回来（状态式接管）。
-    // 详情页/EQ 页 onResume 会强制隐藏，一级页接管时也要主动拉回，否则按钮会一直消失；
-    // 若用户之前滚动到底部处于隐藏态（bottomButtonsHidden=true），则尊重滚动状态不弹回。
-    // 注意：一级页互切（音乐↔我的）时按钮本来就是 VISIBLE，不能无脑调用 setBottomButtonsVisible(true)
-    // 否则点击"音乐列表"按钮切页时会看到三个按钮一起 Q 弹一遍（动画被无条件重播）
+    // 回页可见：拉回底部按钮
+    // 滚动隐藏态不弹回；一级页互切不重播动画
     override fun onResume() {
         super.onResume()
         if (!bottomButtonsHidden) {
@@ -2640,7 +2736,7 @@ class MusicFragment : Fragment() {
 
     override fun onDestroyView() {
         super.onDestroyView()
-        // 页面销毁：取消切歌监听，别让回调打到已销毁的列表上
+        // 页面销毁：取消切歌监听
         PlayerManager.removeSongChangeListener(onSongChangeListener)
         // 外部刷新回调失效：防止回收站恢复时打到已销毁的 view（onViewCreated 里重新赋值）
         onSongsRestoredExternally = null

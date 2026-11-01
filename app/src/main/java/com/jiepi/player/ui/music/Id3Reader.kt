@@ -14,7 +14,7 @@ import java.io.BufferedInputStream
  */
 object Id3Reader {
 
-    // 最多读头部字节：ID3v2 标签常见 < 64KB；Vorbis Comment 常见 < 8KB；256KB 兜底覆盖超大标签
+    // 头部读取上限（256KB 兜底）
     private const val HEAD_LIMIT = 256 * 1024
 
     /**
@@ -62,7 +62,7 @@ object Id3Reader {
         }
     }
 
-    // ID3v2 的 USLT 帧：enc(1) + language(3) + content descriptor(00结尾) + 歌词正文
+    // USLT 帧结构（enc + language + descriptor + 歌词）
     private fun parseId3v2Lyrics(head: ByteArray): String? {
         val major = head[3].toInt() and 0xff
         // 只支持 v2.3 / v2.4（与 readTitleArtist 一致）
@@ -80,7 +80,7 @@ object Id3Reader {
                 val enc = head[p + 10].toInt() and 0xff
                 val dataStart = p + 11
                 val dataEnd = p + 10 + size
-                // 跳过 language(3) + content descriptor（null 结尾；UTF-16 下是 00 00）
+                // 跳过 language + content descriptor
                 var q = dataStart + 3
                 q = skipUsltDescriptor(head, q, dataEnd, enc)
                 val lyrics = decodeId3Text(head, q, dataEnd - q, enc)
@@ -91,7 +91,7 @@ object Id3Reader {
         return null
     }
 
-    // 跳过 USLT 的 content descriptor：单字节编码（0/3）用 1 字节 00，UTF-16（1/2）用 00 00
+    // 跳过 descriptor（按编码取 1/2 字节 00）
     private fun skipUsltDescriptor(bytes: ByteArray, off: Int, limit: Int, enc: Int): Int {
         var q = off
         if (enc == 1 || enc == 2) {
@@ -142,7 +142,7 @@ object Id3Reader {
         return null
     }
 
-    // 在 Vorbis Comment 里取指定键的值（FLAC/OGG 内嵌歌词规范键：LYRICS / UNSYNCEDLYRICS）
+    // Vorbis Comment 取键值（歌词键 LYRICS）
     private fun parseVorbisCommentValue(data: ByteArray, offset: Int, limit: Int, vararg keys: String): String? {
         var p = offset
         if (p + 4 > limit) return null
@@ -222,10 +222,7 @@ object Id3Reader {
         var s = off
         var e = off + len
         when (enc) {
-            // UTF-16（with BOM / BE）：有效数据恒为偶数长度，字节层不做终止符裁剪——
-            // 末尾的 00 00 可能是字符高字节(LE下 'e'=65 00)+单字节终止符，成对裁剪会吃字。
-            // 统一靠解码后的 '\u0000' 截断（见下方 indexOf）。
-            // 仅当奇数长度且末字节为 0 时，裁掉多余的单字节终止符。
+            // UTF-16：偶长度不裁剪，靠解码后 \u0000 截断；奇数长度末字节为 0 才裁
             1, 2 -> {
                 if ((e - s) % 2 == 1 && bytes[e - 1] == 0.toByte()) e--
             }

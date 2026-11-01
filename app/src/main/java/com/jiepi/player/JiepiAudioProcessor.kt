@@ -2,6 +2,7 @@ package com.jiepi.player
 
 import androidx.media3.common.C
 import androidx.media3.common.audio.AudioProcessor
+import android.util.Log
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.PI
@@ -13,53 +14,37 @@ import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.tanh
 
-// 应用内 DSP 音效处理器：完全绕开系统 audiofx，任何 ROM（LineageOS/国产 ROM）都生效
-// 功能链：10 段参数 EQ（双二阶 IIR 级联，含高音加强/高保真激励/低音加强）
-//        → 混响（Schroeder 简化：16 梳状并联 + 5 全通串联，按干湿比混入）
-//        → 环绕（M/S 立体声拓宽）
-//        → 动态推进（tanh 软限幅增益）
-// 只处理 PCM 16bit，输出与输入同格式同采样率，不改变采样数
+// 应用内 DSP 音效处理器（绕开系统 audiofx）
+// 功能链：EQ → 混响 → 环绕 → 动态 → 限幅
 class JiepiAudioProcessor : AudioProcessor {
 
-    // 10 段 EQ 中心频率（Hz），与 UI 标签一致（32/64/125/250/500/1K/2K/4K/8K/16K）。
-    // 首段 32Hz 覆盖超低频，与 UI 第一档位对齐。
+    // 10 段 EQ 中心频率（与 UI 标签一致）
     private val eqFreqs = floatArrayOf(32f, 64f, 125f, 250f, 500f, 1000f, 2000f, 4000f, 8000f, 16000f)
 
     // 每段双二阶系数 b0 b1 b2 a1 a2
     private val eqCoeffs = Array(10) { FloatArray(5) }
-    // 每声道每段状态 [ch][band][x1, x2, y1, y2]
-    private val eqState = Array(2) { Array(10) { FloatArray(4) } }
+    // 每声道每段 IIR 状态 [ch][band][s1,s2]
+    private val eqState = Array(2) { Array(10) { FloatArray(2) } }
+    // denormal 防初始化（近零输入防 CPU 降速）
+    private val DENORMAL_EPS = 1e-25f
 
-    // EQ 系数平滑渐变：rebuild 算出的目标系数先进 eqCoeffsTarget，eqCoeffs（processEq
-    // 实际读取）由播放线程每音频块向目标逼近——参数变化不清 IIR 历史，滤波器在渐变中
-    // 自然过渡，无"状态归零瞬态"（拖增益滑块呲呲啦啦/沙沙的根源之一）。
-    // 渐变 12 块 ≈ 150~250ms，听感平滑且拖动响应不明显滞后。
+    // EQ 系数平滑渐变（12 块 ≈ 150~250ms，避免参数突变）
     private val eqCoeffsTarget = Array(10) { FloatArray(5) }
     private var coeffFadeRemaining = 0
     private val COEFF_FADE_BLOCKS = 12
 
-    // 混响：16 梳状 + 4 全通（Freeverb 结构）+ 预延迟 + 高频阻尼。
-    // 延迟表用 Freeverb 式非等差错开（25.31~49.73ms，间隔 52~134 样本不规则、无公共因子），
-    // 避免等距延迟的共振峰周期对齐——等距步进会使 16 个梳状在 630/3125/6875Hz 等频点
-    // 16 重叠加，反馈稍高就激发成窄带"吱"声。
-    // 窗口 25~50ms：落在直达声加固区（30~50ms）内并含低端回声密度层；上限收在
-    // CCRMA 回声感知阈（反射超 40~50ms 易被感知为独立回声）以内。
-    // 梳状反馈 0.86、阻尼 0.55、总低通 0.30、全通反馈 0.45、预延迟 45ms、干湿比 0.35。
+    // 混响延迟表：16 梳状非等差错开 + 预延迟 45ms
     private val combDelays = floatArrayOf(
         0.02500f, 0.02609f, 0.02736f, 0.02873f, 0.03018f, 0.03182f, 0.03355f, 0.03536f,
         0.03727f, 0.03927f, 0.04136f, 0.04355f, 0.04555f, 0.04736f, 0.04882f, 0.05000f
     )
-    // 全通延迟表：全部缩在 <10ms 无色界限内且样本数互质（@48k：466/350/269/197/139，
-    // 139 为质数，五者两两无公因子），直通副本叠加不产生共振发色；
-    // 5 级全通串联（Schroeder 原版结构）保证回声密度。
+    // 全通延迟表（互质样本数，5 级串联）
     private val allpassDelays = floatArrayOf(0.0097f, 0.0073f, 0.0056f, 0.0041f, 0.0029f)
-    // 梳状反馈 0.86：对标 Freeverb 经典 0.84 略高一档，尾音更长空间更饱满；
-    // 仍远低于 DC 稳定上限（0.98），安全。
-    private val combFeedback = FloatArray(16) { 0.86f }
-    // 全通反馈 0.45：扩散降档，回声摆远变淡，避免混响过浓/朦胧。
+    // 梳状反馈 0.88（大厅级：RT60 中频约 2.0s）
+    private val combFeedback = FloatArray(16) { 0.88f }
+    // 全通反馈 0.45
     private val allpassFeedback = 0.45f
-    // 高频阻尼强度（内部 alpha=1/(1+damp)，damp=0→直通、∞→完全无高频）
-    // 阻尼 0.55：高频衰减放慢一档，尾音更亮更透。
+    // 高频阻尼强度（阻尼 0.55）
     private val damp = 0.55f
     private val dampAlpha = 1f / (1f + damp) // ≈0.645：一次反射后高频保留更多
     private var combLowpass = Array(2) { FloatArray(16) } // [ch][n] 每个梳状反馈路径的低通状态
@@ -70,12 +55,14 @@ class JiepiAudioProcessor : AudioProcessor {
     private var combIdx = emptyArray<IntArray>()
     private var allpassBuf: Array<Array<FloatArray>> = emptyArray()
     private var allpassIdx = emptyArray<IntArray>()
-    // 湿声总低通状态 [ch]：混响链末端再削一道高频，返回声彻底朦胧（消除"高频跟在后面"的跟拍感）
+    // 湿声总低通状态 [ch]
     private var reverbLpState = FloatArray(0)
-    // 湿声高通状态 [ch]（xPrev/yPrev）。业界标准：湿声路径高通砍 200Hz 以下低频泥巴，
-    // 低频混响变少、高频仙气通透。一阶高通 α≈0.0255 @48k（f_c≈200Hz）。
+    // 湿声高通状态 [ch]（砍 300Hz 以下低频）
     private var reverbHpState = FloatArray(0)
     private var reverbHpXPrev = FloatArray(0)
+    // 入口低切状态 [ch]（300Hz 低切，低频不进混响）
+    private var reverbInHpState = FloatArray(0)
+    private var reverbInHpXPrev = FloatArray(0)
 
     // 输入/输出格式状态
     private var sampleRate = 48000
@@ -85,16 +72,13 @@ class JiepiAudioProcessor : AudioProcessor {
     private var outputBuffer: ByteBuffer =
         ByteBuffer.allocateDirect(65536).order(ByteOrder.nativeOrder())
 
-    // 常驻峰值限幅器缓冲：复用避免每块分配（输出端兜底防削波爆音）
+    // 峰值限幅器缓冲（复用防每块分配）
     private var limiterBuf = FloatArray(0)
     private var limiterBufR = FloatArray(0)
-    // 分频限幅：低频段/高频段各自独立峰值检测与平滑增益，
-    // 低频超 0.94 只压低频段、不再连坐压掉高音（泵动效应根治）
+    // 分频限幅：低/高频段独立限幅
     private var limSmoothGainLow = 1f
     private var limSmoothGainHigh = 1f
-    // LR4 分频器：交叉点 250Hz、24dB/oct（低通/高通各 2 个二阶 Butterworth biquad 级联，
-    // Q=1/√2，网上公式核实）。系数 Double 计算防低频量化噪声；滤波链常运行、不触发时
-    // 增益=1（禁直通绕过，避免滤波拓扑突变频谱跳变爆音）
+    // LR4 分频器（交叉 250Hz，24dB/oct）
     private val lr4CrossoverHz = 250.0
     private var lr4LpCoeff = FloatArray(5) // 归一化 [b0,b1,b2,a1,a2]
     private var lr4HpCoeff = FloatArray(5)
@@ -102,21 +86,15 @@ class JiepiAudioProcessor : AudioProcessor {
     private var lr4InitSampleRate = 0
     private var limiterLow = Array(2) { FloatArray(0) } // [ch][f] 低频段缓冲
     private var limiterHigh = Array(2) { FloatArray(0) } // [ch][f] 高频段缓冲
-    // 切歌防 pop：旧歌淡出到 0 再停、新歌从 0 淡入，消除 AudioTrack 硬停/重启的波形截断声。
-    // 手动切歌是"播放中硬切"，stop 瞬间波形被截断会出一声咔哒；自动切歌歌已自然播完所以没声。
+    // 切歌防 pop：淡出到 0 再停、从 0 淡入
     private var fadeGain = 1f
     private var fadeTarget = 1f
-    // 淡入淡出时长（ms）：默认 25ms 保切歌手感；resume 恢复播放用 150ms 长渐变盖 AudioTrack
-    // 硬件恢复期（网上标准 issue #3336：pause 后硬件仍播 50~150ms 残余，play 空缓冲启动有瞬态）。
+    // 淡入淡出时长（ms）：默认 25ms，恢复播放用 150ms
     private var fadeMs = 25
+    // ========== 滤波状态：播放前真实信号预滚（水流声根治） ==========
+    // IIR 状态于真实信号中预收敛
 
-    // 变速 / 变调（Rubber Band 引擎，NDK 编译 librubberband.so）
-    // 不走 ExoPlayer PlaybackParameters：那会让 Media3 Sonic + 整条 DSP 链 flush 重置，输出空窗爆音。
-    // Rubber Band 原生支持流内实时调参（RealTime 模式），且内部自带参数平滑——setTimeRatio /
-    // setPitchScale 的新目标会在引擎内部平滑过渡到新值。因此这里不再逐样本微调（逐样本改目标
-    // 只会让内部平滑器永远追不上 → 引擎持续重同步 → 输出间歇停滞 avail==0 → 变速断续），
-    // 改为每个音频块推进一次目标值，约 6 块（100~200ms）渐变到新值，块间过渡由引擎内部平滑完成。
-    // 与 seek/切歌的门控（armSonicGate）配合：窗口重建期静音帧兜底，恢复输出淡入，杜绝卡顿爆音。
+    // 变速/变调（Rubber Band 引擎，块级调参 + 门控静音兜底）
     private var sonic: RubberBandStream? = null
     @Volatile private var targetSpeed = 1f
     @Volatile private var targetPitch = 1f
@@ -124,44 +102,29 @@ class JiepiAudioProcessor : AudioProcessor {
     private var fadeFromPitch = 1f
     private var fadeRemaining = 0
     private var fadeTotal = 1
-    // 渐变块数：每个音频块（Media3 常见 480~2048 帧 ≈ 10~43ms@48k）调一次参数，
-    // 6 块 ≈ 100~260ms 平滑渐变到目标（引擎内部平滑填充块间过渡）
+    // 渐变块数（6 块 ≈ 100~260ms 到目标）
     private val FADE_BLOCK_COUNT = 6
-    private var sonicScratch = ShortArray(0) // Rubber Band 输入/输出中转（交错 PCM16）
-    // 变速窗口门控：seek/切歌后 Sonic reset 重建内部预缓冲窗口期间（首批输出未出现），
-    // processor 保持输出静音；Sonic 恢复输出那一刻解除门控并启动淡入——数据流触发
-    // 替代固定时钟等待（时钟盖不住更深窗口 → 首批数据以满增益轰出 → 爆音漏网）
+    private var sonicScratch = ShortArray(0) // Rubber Band 中转缓冲
+    // 变速窗口门控：窗口重建期输出静音，恢复输出时解除并淡入
     @Volatile private var sonicGateActive = false
-    // 静音帧标记：avail==0 时刚输出过静音帧（Sonic 窗口重建/变速渐变适应/缓冲不足）。
-    // avail>0 恢复输出时用它区分"从意外静音恢复"（需淡入防突变小尾巴）与正常播放
-    // （保持当前 fadeTarget，切歌 fadeOut 等主动流程不受干扰）
+    // 静音帧标记（恢复输出时需淡入防突变）
     @Volatile private var silentSent = false
-    // 变速 seek/切歌门控解除后的窗口稳定期（样本数）：Sonic resetBuffers 后恢复输出时，
-    // 引擎内部还在锁定新位置的基音周期/窗相位，头 ~100ms 输出有抖动瞬态（变速拖条
-    // "短杂音"的嫌疑点）。恢复输出后先静音稳定期，再 fadeIn(500) 平滑接入。
+    // 门控解除后窗口稳定期（先静音稳定再淡入）
     private var gateStableSamples = 0
-    // 淡入完成同步信号（RubberBand 与 Media3 seek 配合的关键）：fadeGain 从 0 爬到 1
-    // （fadeIn 真正完成、引擎预热伪影已平滑接入）时置 true。PlayerManager 的 seek 完成
-    // 回调（onPositionDiscontinuity）据此决定何时恢复硬件音量——变速/变调 seek 后引擎
-    // 要经历窗口重建→稳定期→500ms 淡入，seek 完成回调抢跑 setVolume(1f) 会把预热中段的
-    // 抖动瞬态从渐变里轰出来（变速/变调拖条杂音的根因）。非变速直通无预热，不受影响。
+    // 淡入完成同步信号（通知 PlayerManager 恢复硬件音量）
     @Volatile private var fadeInDoneNotified = false
-    // seek 完成回调注册的"淡入完成"监听：播放线程渐变爬到 1 时触发一次
+    // 淡入完成回调（爬到 1 时触发一次）
     @Volatile var onFadeInDone: (() -> Unit)? = null
+    // 预滚完成标记（同格式 configure 保留稳态）
+    @Volatile private var warmedFormatReady = false
 
-    // 线程安全：UI 线程设置目标值，播放线程在下一音频块一步到位（fadeRemaining=1）。
-    // 不做多块插值：RubberBand realtime 引擎内部自带参数平滑，多次大步中间值反而让引擎
-    // 平滑器反复重同步（available 短暂归零 → 静音帧兜底 → 恢复淡入），听感就是
-    // "每次设新值都归零后重新载入"。一步到位让引擎一次性收敛，渐变由引擎内部完成。
+    // 变速/变调参数设置（一步到位，渐变由引擎内部完成）
     fun setSpeedPitch(speed: Float, pitch: Float) {
         synchronized(this) {
             val s = speed.coerceIn(0.5f, 2f)
             val p = pitch.coerceIn(0.5f, 2f)
             if (s == targetSpeed && p == targetPitch) return
-            // 引擎已被归零销毁/从未创建，重新开变速变调：new 干净实例再武装（官方标准）。
-            // sampleRate>0 兜底：播放前（未 configure）只记参数，configure 会负责创建；
-            // 归零销毁不在这里做——由播放线程 queueInput 直通块负责，避免 UI 线程
-            // close 与播放线程 writeShort 的并发竞态。
+            // 引擎未创建时新建（configure 前只记参数）
             if (sonic == null && sampleRate > 0) {
                 sonic = RubberBandStream(sampleRate, channelCount)
             }
@@ -169,31 +132,25 @@ class JiepiAudioProcessor : AudioProcessor {
             fadeFromPitch = sonic?.getPitch() ?: targetPitch
             targetSpeed = s
             targetPitch = p
-            fadeRemaining = 1 // 一步到位：下一音频块推进时 k=1，直接 set 到目标
+            fadeRemaining = 1 // 一步到位
         }
     }
 
     fun setSpeed(speed: Float) { setSpeedPitch(speed, targetPitch) }
     fun setPitch(pitch: Float) { setSpeedPitch(targetSpeed, pitch) }
 
-    // 判定"真正需要 Sonic"：目标非原速，或当前实际速度/音调还在渐变中（未回到 1）。
-    // 与 queueInput 的 needSonic 同一套标准；PlayerManager 用它区分变速/变调路径与直通，
-    // 避免"恢复原速但渐变未完成"时误判走非变速快速淡入（引擎预热伪影被快速渐变放大 = 传染）。
+    // 判定真正需要 Sonic（目标非原速或仍在渐变中）
     fun isSonicActive(): Boolean {
         val s = sonic ?: return false
         return Math.abs(targetSpeed - 1f) > 1e-4f || Math.abs(targetPitch - 1f) > 1e-4f ||
             Math.abs(s.getSpeed() - 1f) > 1e-3f || Math.abs(s.getPitch() - 1f) > 1e-3f
     }
 
-    // 淡入完成且门控未被新一轮 seek/切歌复位（fadeTarget 仍为 1、fadeGain 已爬到 1）：
-    // PlayerManager 的 onFadeInDone 回调据此校验后恢复硬件音量，防止"事件触发后用户立刻
-    // 再次拖条"的竞态窗口里把新 seek 的静音罩提前捅破。
+    // 淡入完成校验（防竞态捅破新 seek 静音罩）
     fun isFadeInDone(): Boolean =
         fadeInDoneNotified && fadeTarget == 1f && fadeGain >= 1f
 
-    // 每个音频块调用一次（processFrames 入口）：把 Rubber Band 参数向目标推进 1/fadeTotal。
-    // 不逐样本调参：RubberBand realtime 内部自带参数平滑，逐样本改目标会阻止平滑器收敛
-    // （引擎持续重同步 → 输出间歇停滞 → 变速加快断续的根源），块级推进让引擎块间平滑过渡。
+    // 每音频块向目标推进一次变速参数
     private fun advanceFade() {
         if (fadeRemaining <= 0) return
         fadeRemaining--
@@ -202,7 +159,7 @@ class JiepiAudioProcessor : AudioProcessor {
         sonic?.setPitch(fadeFromPitch + (targetPitch - fadeFromPitch) * k)
     }
 
-    // 音效参数（0~100 的百分比在 setter 里归一化成 0~1）
+    // 音效参数（0~100 归一化为 0~1）
     @Volatile private var eqLevels = FloatArray(10) // -12 ~ +12 dB
     @Volatile private var effectDynamic = 0f
     @Volatile private var effectHifi = 0f
@@ -211,26 +168,17 @@ class JiepiAudioProcessor : AudioProcessor {
     @Volatile private var effectSurround = 0f
     @Volatile private var effectReverb = 0f
 
-    // 效果参数平滑：dynamic/surround/reverb 在 processFrames 逐样本读取，UI 线程滑块实时
-    // 写上述 volatile 目标值——播放线程用一阶指数逼近平滑值，防止"参数逐样本突变→波形
-    // 瞬间跳变"（拖动态/环绕/混响滑块呲呲啦啦沙沙的根源，EQ 类已走系数渐变不需此平滑）。
-    // 时间常数 ~15ms：拖动响应无明显延迟，突变被抹平，松手后 ~45ms 收敛。fxSmoothCoef
-    // 在 configure 里按采样率算好（每样本 3 次乘加，开销可忽略）。
+    // 效果参数平滑（一阶指数逼近，时间常数 ~15ms）
     private var fxSmoothCoef = 0f
     private var smoothEffectDynamic = 0f
     private var smoothEffectSurround = 0f
     private var smoothEffectReverb = 0f
-    // 音效参数已更新但尚未重建标志：UI 线程 setEqLevels/setEffects 只写参数快照并置位，
-    // 播放线程 queueInput 开头检测到置位才执行 rebuild（与 processFrames 天然串行）。
+    // 音效参数待重建标志（UI 置位，播放线程执行 rebuild）
     @Volatile private var fxDirty = false
 
     fun setEqLevels(levels: FloatArray) {
         eqLevels = levels.copyOf()
-        // 只标记待重建，rebuild 挪到播放线程 queueInput 里执行：滑块回调跑在 UI 线程，
-        // rebuild 会清空 eqState/重写 eqCoeffs/重建混响线，播放线程 processFrames 同时
-        // 在逐样本读这些数组 → 并发撕裂（新系数套半清空状态、IIR 历史跳变）→
-        // 拖动增益滑块"呲呲啦啦/沙沙"。volatile 快照 + 播放线程重建后无竞态。
-        // （rebuild 在 fxDirty 路径已不再清 eqState，系数走 eqCoeffsTarget 块级渐变）
+        // 置待重建标志（播放线程执行 rebuild，防并发撕裂）
         fxDirty = true
     }
 
@@ -244,25 +192,18 @@ class JiepiAudioProcessor : AudioProcessor {
         this.effectLow = effectLow / 100f
         this.effectSurround = effectSurround / 100f
         this.effectReverb = effectReverb / 100f
-        // 同上：只置待重建标志，由播放线程 queueInput 执行 rebuild，避免 UI 线程
-        // 高频滑块回调与 processFrames 并发撕裂 DSP 状态
+        // 置待重建标志（播放线程执行 rebuild）
         fxDirty = true
     }
 
-    // 合成最终各段 dB → 重算 EQ 双二阶系数，并重建混响延时线
-    // clearState=true 仅用于 configure（采样率/声道变化，旧采样率下的 IIR 历史套新系数
-    // 会首帧跳变）；滑块调参（fxDirty 路径）一律 false——不清 eqState，系数走
-    // eqCoeffsTarget → eqCoeffs 块级渐变，滤波器在渐变中自然连续过渡，无"状态归零瞬态"。
+    // 重算 EQ 系数并重建混响延时线（true：系数写定 + zi 注入；false：块级渐变）
     private fun rebuild(clearState: Boolean = false) {
-        if (clearState) {
-            for (ch in 0 until 2) for (b in 0 until 10) eqState[ch][b].fill(0f)
-        }
         val finalDb = FloatArray(10)
         for (i in 0..9) {
             var db = eqLevels[i]
-            if (i in 8..9) db += effectHigh * 5.0f // 高音增强（上限 5.0dB）
-            if (i >= 5) db += effectHifi * 3.0f // 超高保真激励（上限 3.0dB）
-            if (i <= 2) db += effectLow * 2.6f // 低音增强（上限 2.6dB）
+            if (i in 8..9) db += effectHigh * 5.0f // 高音增强
+            if (i >= 5) db += effectHifi * 3.0f // 高保真激励
+            if (i <= 2) db += effectLow * 2.6f // 低音增强
             finalDb[i] = db.coerceIn(-12f, 12f)
         }
         val fs = sampleRate.toFloat()
@@ -280,62 +221,79 @@ class JiepiAudioProcessor : AudioProcessor {
             val a0 = 1f + alpha / a
             val a1 = -2f * cosW
             val a2 = 1f - alpha / a
-            // 目标系数写入 eqCoeffsTarget，eqCoeffs 由播放线程每音频块向目标逼近
-            // （processFrames 开头的系数渐变推进），IIR 历史保持不变自然过渡。
-            eqCoeffsTarget[band][0] = b0 / a0
-            eqCoeffsTarget[band][1] = b1 / a0
-            eqCoeffsTarget[band][2] = b2 / a0
-            eqCoeffsTarget[band][3] = a1 / a0
-            eqCoeffsTarget[band][4] = a2 / a0
+            val c = floatArrayOf(b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0)
+            if (clearState) {
+                // 系数一步写定
+                eqCoeffs[band] = c
+            } else {
+                // 目标系数进 target，块级渐变逼近
+                eqCoeffsTarget[band] = c
+            }
         }
-        coeffFadeRemaining = COEFF_FADE_BLOCKS
+        if (clearState) {
+            coeffFadeRemaining = 0 // 无渐变待推
+            injectEqSteadyState() // 注入 zi 稳态
+        } else {
+            coeffFadeRemaining = COEFF_FADE_BLOCKS
+        }
         initReverb()
+    }
+
+    // DC 稳态初始条件（zi）注入：状态重建时稳态起步，无零状态瞬态
+    private fun injectEqSteadyState() {
+        for (ch in 0 until 2) {
+            var g = 1f
+            for (band in 0 until 10) {
+                val c = eqCoeffs[band]
+                val gSum = c[0] + c[1] + c[2]
+                val aSum = 1f + c[3] + c[4]
+                val y0 = if (aSum != 0f) g * gSum / aSum else g * gSum
+                val st = eqState[ch][band]
+                st[0] = (c[1] + c[2]) * g - (c[3] + c[4]) * y0
+                st[1] = c[2] * g - c[4] * y0
+                g = y0
+            }
+        }
     }
 
     private fun initReverb() {
         val ch = channelCount.coerceIn(1, 2)
-        // 只在采样率/声道变化（缓冲尺寸不符）时才重建延时线；
-        // 调音效滑块时尺寸没变则跳过，保留混响尾巴不被掐断。
-        // 注：延时表 combDelays/allpassDelays 是常量，首级长度即可代表整表尺寸。
+        // 格式变化才重建延时线（保留混响尾巴）
         val needRebuild = combBuf.size != ch ||
             allpassBuf.size != ch ||
-            preDelayLen != (sampleRate * 0.045f).toInt().coerceAtLeast(1000) ||
+            preDelayLen != (sampleRate * 0.032f).toInt().coerceAtLeast(1000) ||
             (combBuf.firstOrNull()?.firstOrNull()?.size ?: 0) !=
             (sampleRate * combDelays[0]).toInt().coerceAtLeast(100) ||
             (allpassBuf.firstOrNull()?.firstOrNull()?.size ?: 0) !=
             (sampleRate * allpassDelays[0]).toInt().coerceAtLeast(20)
         if (!needRebuild) return
-        // 注意：内层 lambda 参数 n 是梳状/全通索引（不是声道索引）。
-        // 每级缓冲长度必须按各自延时表计算（16 级非等差错开），声道间复用同一延时表；
-        // 若误用声道索引会导致各级同长、首反射同刻叠加成一道强回声。
+        // 每级缓冲按各自延时表建（非等差错开）
         combBuf = Array(ch) { _ -> Array(16) { n -> FloatArray((sampleRate * combDelays[n]).toInt().coerceAtLeast(100)) } }
         combIdx = Array(ch) { IntArray(16) }
         allpassBuf = Array(ch) { _ -> Array(5) { n -> FloatArray((sampleRate * allpassDelays[n]).toInt().coerceAtLeast(20)) } }
         allpassIdx = Array(ch) { IntArray(5) }
-        // 预延迟 45ms：干声先到、混响核心晚 45ms 启动——空间距离感拉开但不失紧凑
-        preDelayLen = (sampleRate * 0.045f).toInt().coerceAtLeast(1000)
+        // 预延迟 32ms（大厅类 20~40ms 区间内）
+        preDelayLen = (sampleRate * 0.032f).toInt().coerceAtLeast(1000)
         preDelayBuf = Array(ch) { FloatArray(preDelayLen) }
         preDelayIdx = IntArray(ch)
         reverbLpState = FloatArray(ch)
-        // 湿声高通状态初始化
         reverbHpState = FloatArray(ch)
         reverbHpXPrev = FloatArray(ch)
+        reverbInHpState = FloatArray(ch)
+        reverbInHpXPrev = FloatArray(ch)
         for (c in 0 until 2) combLowpass[c].fill(0f)
     }
 
     // ========== AudioProcessor 接口 ==========
 
     override fun configure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
+        // 格式真变化或未预滚才清状态
+        val fmtChanged = inputAudioFormat.sampleRate != sampleRate ||
+            inputAudioFormat.channelCount != channelCount
         sampleRate = inputAudioFormat.sampleRate
         channelCount = inputAudioFormat.channelCount
         active = inputAudioFormat.encoding == C.ENCODING_PCM_16BIT
-        // Rubber Band 按声道创建：切歌时 mono/stereo 交替必须重建，否则交错缓冲错乱。
-        // 采样率变化不必重建（Rubber Band 构造时按 sampleRate 建窗），但渐变时长要按新采样率重算。
-        // 只在真正需要变速/变调（目标非原速原调）时才创建引擎——非变速用户全程不碰
-        // RubberBand，避免"configure 创建 → queueInput 直通 close"在音频线程的创建/销毁
-        // 阻塞（native 内存分配/释放数十 ms）把切歌/拖条的数据流打断出呲啦杂音。
-        // 引擎已存在且声道变化时同样要重建（交错缓冲错乱），条件与旧逻辑等价：
-        // 旧逻辑"cur==null 就建"被限定为变速态，变速态下两种分支都覆盖。
+        // 变速态且引擎缺失/声道变化时创建引擎
         val cur = sonic
         if ((targetSpeed != 1f || targetPitch != 1f) &&
             (cur == null || cur.getChannels() != channelCount)
@@ -344,23 +302,24 @@ class JiepiAudioProcessor : AudioProcessor {
             sonic?.setSpeed(targetSpeed)
             sonic?.setPitch(targetPitch)
         }
-        fadeTotal = FADE_BLOCK_COUNT // 渐变块数（不再按样本数：逐样本调参见 advanceFade 注释）
+        fadeTotal = FADE_BLOCK_COUNT // 渐变块数
         sonicScratch = ShortArray(0)
-        // 效果参数平滑系数：时间常数 ~15ms（一阶指数逼近的目标值收敛速度）。
-        // 采样率越高每样本逼近步长越小，按采样率归一化保证时间常数恒定。
+        // 效果参数平滑系数（按采样率归一化，时间常数 ~15ms）
         fxSmoothCoef = 1f - exp(-1f / (sampleRate * 0.015f))
-        rebuild(clearState = true) // 采样率/声道变化：清 EQ 历史，旧状态套新系数会首帧跳变
+        // 预滚且格式未变则保留稳态，否则重建（系数写定 + zi 注入）
+        if (fmtChanged || !warmedFormatReady) {
+            Log.i("JiepiWarm", "configure: REBUILD in=${inputAudioFormat.sampleRate}/${inputAudioFormat.channelCount} fmtChanged=$fmtChanged warmed=$warmedFormatReady")
+            rebuild(clearState = true)
+        } else {
+            // 预滚同格式：跳过 rebuild（避免重爬系数渐变）
+            Log.i("JiepiWarm", "configure: KEEP warmed state in=${inputAudioFormat.sampleRate}/${inputAudioFormat.channelCount} fmtChanged=$fmtChanged warmed=$warmedFormatReady")
+        }
         return inputAudioFormat
     }
 
     override fun queueInput(inputBuffer: ByteBuffer) {
         if (!active) return
-        // 播放线程内执行待重建的音效参数：UI 线程 setEqLevels/setEffects 只写 volatile
-        // 参数快照并置 fxDirty，这里检测到才 rebuild——与 processFrames 同线程串行，
-        // 消除"滑块拖动时 UI 线程重写 eqCoeffs 与播放线程逐样本读并发撕裂"；
-        // fxDirty 路径不清 eqState，目标系数由 eqCoeffs 块级渐变逼近，无状态归零瞬态。
-        // 注意：rebuild 必须读最新 sampleRate/channelCount，Media3 保证 queueInput
-        // 之前必已 configure，安全。
+        // 播放线程内执行待重建的音效参数（与 processFrames 串行，防并发撕裂）
         if (fxDirty) {
             fxDirty = false
             rebuild()
@@ -371,19 +330,14 @@ class JiepiAudioProcessor : AudioProcessor {
         val frames = bytes / 2 / ch
         if (frames == 0) return
 
-        // ---- 0) 变速/变调（RubberBand NDK 引擎，放在 DSP 链最前） ----
+        // ---- 0) 变速/变调（RubberBand NDK 引擎，DSP 链最前） ----
         val s = sonic
-        // 变速门控开关：避免变速状态传染正常拖条。
-        // sonic 实例一旦创建就永远挂在链上，即使 setSpeed(1.0) 恢复原速，Sonic 内部仍有
-        // 预缓冲窗口——seek 时 resetBuffers 重建窗口产生的起振瞬态，会传染给正常拖条。
-        // 判定"真正需要 Sonic"：目标非原速，或当前实际速度/音调还在渐变中（未回到 1）。
-        // 恢复原速后渐变完成（实际≈1）→ 直接绕开 Sonic 走直通链，彻底与变速状态隔离。
+        // 变速门控：恢复原速后绕开 Sonic 走直通链，避免状态传染
         val needSonic = s != null && isSonicActive()
         if (s != null && needSonic) {
             val need = frames * ch
             if (sonicScratch.size < need) sonicScratch = ShortArray(need)
-            // 直接顺序读 short：读完 position 自动到 limit，表示本块输入已被消费。
-            // 禁止用 mark/reset 回退——Media3 认为缓冲未消费会卡住整个管线，表现就是无声。
+            // 顺序读 short（禁止 mark/reset 回退，否则 Media3 管线卡死无声）
             for (i in 0 until need) sonicScratch[i] = inputBuffer.short
             if (!s.writeShort(sonicScratch, frames)) {
                 inputBuffer.position(inputBuffer.limit())
@@ -393,86 +347,60 @@ class JiepiAudioProcessor : AudioProcessor {
             if (avail > 0) {
                 if (sonicScratch.size < avail * ch) sonicScratch = ShortArray(avail * ch)
                 val got = s.readShort(sonicScratch, avail)
-                // 变速窗口门控解除：Sonic 恢复输出 = 内部预缓冲窗口已重建完成。
-                // armSonicGate 把 fadeTarget 置 0 是"窗口期静音"，Sonic 恢复输出那一刻必须
-                // 把目标拉回 1（fadeIn）启动淡入。若只解除 gate 不拉回目标，processor 将
-                // 永远以 fadeGain=0 输出 → 变速拖条后进度条在走但永久无声。
-                // 150ms 长渐变：Sonic 恢复输出首批数据带窗口重建的起振瞬态，默认 25ms
-                // 渐变爬升太快盖不住（变速拖条"很短杂音"的嫌疑点），顶到 150ms 平滑接入，
-                // 代价仅是恢复接入略慢几十毫秒，无爆音更重要。
+                // 门控解除：Sonic 恢复输出时拉回淡入目标（长渐变平滑接入）
                 if (sonicGateActive) {
                     sonicGateActive = false
-                    // 窗口稳定期：Sonic 恢复输出头 ~100ms 引擎还在锁定新位置窗相位，
-                    // 先静音稳定（fadeTarget 保持 0、fadeGain 压 0），等锁定完成再淡入。
-                    // 变速拖条"短杂音"即使 500ms 淡入也盖不住中间段抖动，
-                    // 必须让引擎先稳定下来，fadeIn 才真正是"平滑接入"而非"平滑放大抖动"。
+                    // 窗口稳定期：先静音稳定，锁定完成再淡入
                     gateStableSamples = (sampleRate / 10).coerceAtLeast(2048)
                 }
-                // 从静音帧恢复（刚输出过静音）：Sonic 恢复输出那一刻 fadeGain 已在
-                // 静音期被压 0，fadeTarget 仍为 1 → 自动从 0 淡入，防"静音→满增益"
-                // 突变产生恢复瞬态小尾巴（普通拖条/变速加快"断-小尾巴-接上"的根源）。
-                // 非恢复路径（正常播放 / 切歌 fadeOut 中）不碰 fadeTarget，互不干扰。
+                // 从静音帧恢复：fadeGain 已压 0，自动从 0 淡入防突变
                 if (silentSent) silentSent = false
                 if (gateStableSamples > 0) {
-                    // 稳定期：强制静音输出，不启动淡入
+                    // 稳定期强制静音
                     gateStableSamples -= got
                     fadeGain = 0f
                     fadeTarget = 0f
                 } else if (fadeTarget != 1f) {
-                    // 稳定期结束才启动淡入（长渐变上限，与 fadeOut 对称）
+                    // 稳定期结束启动淡入
                     fadeIn(500)
                 }
                 processFrames(sonicScratch, got, ch)
             } else {
-                // avail==0：Sonic 窗口重建期 / 变速渐变适应期 / 缓冲不够一个基音周期。
-                // 无条件填静音帧保持 AudioTrack 数据流连续，防 underrun"断音"（原非门控
-                // 分支输出空 buffer → 硬件 underrun → 断一下接一下）；若此时是正常播放
-                // 被意外打断（fadeTarget==1），把 fadeGain 压到 0，恢复输出时由 silentSent
-                // 触发淡入，平滑接入无瞬态。主动静音流程（fadeOut / prepareFadeIn / gate
-                // 已置 fadeTarget=0）不压增益，尊重原流程的淡入淡出状态。
+                // avail==0：窗口重建期/渐变适应期/缓冲不足，填静音帧防 underrun 断音
                 outputBuffer.clear()
                 val silentBytes = (frames * ch * 2).coerceAtLeast(4096)
                 if (outputBuffer.capacity() < silentBytes) {
                     outputBuffer = ByteBuffer.allocateDirect(silentBytes).order(ByteOrder.nativeOrder())
                 }
                 silentSent = true
-                // 变速渐变期（引擎参数收敛期）avail 归零是引擎内部平滑的正常现象：
-                // 压 0 会让恢复时触发淡入重载 → 听感"归零后重新载入"；保持增益直接接续。
-                // 非变速（普通播放被意外打断）仍压 0，恢复淡入防瞬态，行为不变。
+                // 变速渐变期保持增益接续；非变速压 0 待恢复淡入
                 if (fadeTarget == 1f && !isSonicActive()) fadeGain = 0f
                 var n = silentBytes / 2
                 while (n-- > 0) outputBuffer.putShort(0)
                 outputBuffer.flip()
             }
         } else {
-            // 直通分支（无 Sonic / 已恢复原速原调绕开 Sonic）
-            // 归零摘链（播放线程执行，与 queueInput 串行，无 UI 线程销毁竞态）：
-            // 引擎实例存在但已不需要（needSonic false = 目标/实际均已回原速原调）→
-            // 直接 close() 销毁置 null，把"开过变速归零"彻底降级为"从没开过"，
-            // 归零后手动切歌/拖条走直通，RubberBand 残留状态不再传染刺啦爆音。
+            // 直通分支（无 Sonic / 已恢复原速绕开）
+            // 归零摘链：引擎不需要时直接销毁，残留状态不再传染
             if (s != null) {
                 s.close()
                 sonic = null
             }
-            // 门控残留清理：变速 seek/切歌的 Sonic 静音期若尚未解除（armSonicGate 把
-            // fadeTarget 压 0）就恢复原速绕开 Sonic，Sonic 恢复输出分支再也不会触发，
-            // 必须在此主动 fadeIn(500) 拉回音量目标，否则 processor 永远 0 增益 →
-            // 进度条在走但永久无声（与变速拖条无声回归同一陷阱）。
-            // 主动 fadeOut（切歌静音）时 sonicGateActive 为 false，此处不碰，尊重原流程。
+            // 门控残留清理：绕开 Sonic 前主动拉回音量目标（防永久无声）
             if (sonicGateActive) {
                 sonicGateActive = false
                 fadeIn(500)
             }
-            // 无 Sonic（异常兜底）：直接走链
+            // 无 Sonic：直接走链
             val inShort = ShortArray(frames * ch)
             for (i in inShort.indices) inShort[i] = inputBuffer.short
             processFrames(inShort, frames, ch)
         }
     }
 
-    // 把交错 PCM16 帧逐帧过 DSP 链；frames 为 0 时仅清空输出缓冲
-    private fun processFrames(inShort: ShortArray, frames: Int, ch: Int) {
-        // 变速会改变样本数：最多 4 倍（0.25x 慢放），输出缓冲按需扩容
+    // 交错 PCM16 帧逐帧过 DSP 链
+    private fun processFrames(inShort: ShortArray, frames: Int, ch: Int, offset: Int = 0) {
+        // 输出缓冲按需扩容（变速最多 4 倍样本数）
         val needBytes = (frames.toLong() * ch * 8L + 4096L).toInt().coerceAtLeast(65536)
         if (outputBuffer.capacity() < needBytes) {
             outputBuffer = ByteBuffer.allocateDirect(needBytes).order(ByteOrder.nativeOrder())
@@ -484,9 +412,9 @@ class JiepiAudioProcessor : AudioProcessor {
             limiterLow = Array(2) { FloatArray(frames) }
             limiterHigh = Array(2) { FloatArray(frames) }
         }
-        advanceFade() // 变速渐变推进：每音频块调一次（不逐样本调参，见 advanceFade 注释）
-        // EQ 系数渐变推进：rebuild 算出目标系数后，eqCoeffs 每音频块向目标逼近一次。
-        // 参数变化不清 IIR 历史，滤波器在渐变中自然连续过渡，无状态归零瞬态（见 rebuild 注释）。
+        // 预热稳定期：真实信号过链收敛，输出静音
+        advanceFade() // 变速渐变推进
+        // EQ 系数渐变推进（不清 IIR 历史，自然连续过渡）
         if (coeffFadeRemaining > 0) {
             val step = 1f / coeffFadeRemaining
             for (band in 0..9) for (j in 0..4) {
@@ -495,41 +423,39 @@ class JiepiAudioProcessor : AudioProcessor {
             coeffFadeRemaining--
         }
         for (f in 0 until frames) {
-            // 效果参数平滑逼近（一阶低通）：目标=volatile 字段（UI 线程滑块实时写），播放
-            // 线程逐样本逼近——动态/环绕/混响拖动时参数不再逐样本突变，波形连续无毛刺。
+            // 效果参数平滑逼近（防逐样本突变毛刺）
             smoothEffectDynamic += (effectDynamic - smoothEffectDynamic) * fxSmoothCoef
             smoothEffectSurround += (effectSurround - smoothEffectSurround) * fxSmoothCoef
             smoothEffectReverb += (effectReverb - smoothEffectReverb) * fxSmoothCoef
-            var l = inShort[f * ch].toFloat() / 32768f
-            var r = if (ch == 2) inShort[f * ch + 1].toFloat() / 32768f else l
+            var l = inShort[(offset + f) * ch].toFloat() / 32768f
+            var r = if (ch == 2) inShort[(offset + f) * ch + 1].toFloat() / 32768f else l
 
-            // 1) EQ：10 段双二阶级联（含高音/高保真/低音补偿）
+            // 1) EQ：10 段双二阶级联
             l = processEq(l, 0)
             r = processEq(r, if (ch == 2) 1 else 0)
 
-            // 2) 混响：湿声按干湿比混入（100% 滑块湿声 30%，原声始终是主体，混响营造氛围）
+            // 2) 混响：湿声按干湿比混入
             if (smoothEffectReverb > 0f) {
                 val wl = processReverb(l, 0)
                 val wr = if (ch == 2) processReverb(r, 1) else wl
-                val mix = smoothEffectReverb * 0.35f // 干湿比 0.35：混响存在感加强，湿声更明显
+                val mix = smoothEffectReverb * 0.42f // 干湿比 0.42（湿声多一点，现场包裹感）
                 l += (wl - l) * mix
                 r += (wr - r) * mix
             }
 
-            // 3) 环绕：M/S 拓宽（100% 时侧信号 +2.0dB）
+            // 3) 环绕：M/S 拓宽
             if (ch == 2 && smoothEffectSurround > 0f) {
                 val m = (l + r) * 0.5f
                 val s = (l - r) * 0.5f
-                val k = 1f + smoothEffectSurround * 0.9953f // 10^(6.0/20)≈1.9953，侧信号最多 +6.0dB
+                val k = 1f + smoothEffectSurround * 0.9953f // 侧信号最多 +6.0dB
                 l = m + s * k
                 r = m - s * k
             }
 
-            // 4) 动态推进：tanh 软限幅 + 干湿混合稀释。
-            // 干声兜底 + 湿声缓升：低段几乎无感，100% 有效小信号增益约 +3.0dB。
+            // 4) 动态推进：tanh 软限幅 + 干湿混合稀释
             if (smoothEffectDynamic > 0f) {
-                val g = 1f + smoothEffectDynamic * 0.9f // 压缩强度 1~1.9（小信号增益 +3.0dB）
-                val wet = smoothEffectDynamic * 0.35f // 湿声比例 0~0.35
+                val g = 1f + smoothEffectDynamic * 0.9f // 压缩强度
+                val wet = smoothEffectDynamic * 0.35f // 湿声比例
                 val dry = 1f - wet * 0.8f // 干声兜底
                 val norm = 1f / tanh(g)
                 l = l * dry + tanh(l * g) * norm * wet
@@ -540,20 +466,15 @@ class JiepiAudioProcessor : AudioProcessor {
             limiterBufR[f] = r
         }
 
-        // 5) 常驻峰值限幅器：LR4 分频双频段独立限幅。
-        // 若全频段一刀切：低频超 0.94 阈值会连坐压掉高音 → 泵动效应。
-        // 方案：信号 → LR4 分频（交叉 250Hz、24dB/oct，低通/高通各 2 个二阶 Butterworth
-        // 级联 Q=1/√2，网上公式核实）→ 低频段独立限幅 + 高频段独立限幅 → 求和输出。
-        // 阈值 0.94、attack ~2ms 快压防削波、release ~300ms 缓释防 pumping（参数沿用）。
-        // 系数 Double 精度计算防低频量化噪声；滤波链常运行、不触发时增益=1（禁直通绕过）。
+        // 5) 常驻峰值限幅器（LR4 双频段，-0.63dBFS）
         ensureLr4Coeffs()
         var lowPeak = 0f
         var highPeak = 0f
         for (f in 0 until frames) {
-            // 每声道：低通 2 级级联 = LR4 低频段；高通 2 级级联 = LR4 高频段
+            // 每声道：低通/高通 2 级级联分频；单声道只跑左声道（防旧歌残留误触发）
             val a = limiterBuf[f]
             val b = limiterBufR[f]
-            for (chIdx in 0 until 2) {
+            for (chIdx in 0 until (if (ch == 2) 2 else 1)) {
                 val x = if (chIdx == 0) a else b
                 val yL = processBiquad(processBiquad(x, lr4State[chIdx][0], lr4LpCoeff), lr4State[chIdx][1], lr4LpCoeff)
                 val yH = processBiquad(processBiquad(x, lr4State[chIdx][2], lr4HpCoeff), lr4State[chIdx][3], lr4HpCoeff)
@@ -565,30 +486,28 @@ class JiepiAudioProcessor : AudioProcessor {
                 if (-yH > highPeak) highPeak = -yH
             }
         }
-        // 双频段各自独立目标增益：本段超 0.94 才压本段，不再跨段连坐
-        val lowTargetGain = if (lowPeak > 0.94f) 0.94f / lowPeak else 1f
-        val highTargetGain = if (highPeak > 0.94f) 0.94f / highPeak else 1f
-        // attack：目标增益低于当前平滑值时快速压（~2ms 防削波）；release：高于当前时慢恢复（~300ms 防 pumping）
+        // 双频段独立目标增益（超阈值才压本段）
+        val lowTargetGain = if (lowPeak > 0.93f) 0.93f / lowPeak else 1f
+        val highTargetGain = if (highPeak > 0.93f) 0.93f / highPeak else 1f
+        // attack 快压 / release 慢恢复
         val attackCoef = 1f - exp(-1f / (sampleRate * 0.002f))
         val releaseCoef = 1f - exp(-1f / (sampleRate * 0.3f))
-        // 淡入淡出步长：fadeMs 毫秒内从 0 到 1（或反向），跟随每样本推进
+        // 淡入淡出步长（按 fadeMs 每样本推进）
         val fadeStep = 1f / (sampleRate * fadeMs / 1000f)
         for (f in 0 until frames) {
             if (fadeGain < fadeTarget) fadeGain = min(fadeGain + fadeStep, fadeTarget)
             else if (fadeGain > fadeTarget) fadeGain = max(fadeGain - fadeStep, fadeTarget)
-            // 淡入完成检测：fadeGain 爬到 1（引擎预热伪影已平滑接入）→ 通知 PlayerManager
-            // 恢复硬件音量（seek 完成回调抢跑 setVolume(1f) 会把预热中段抖动轰出来的根因）。
-            // 每次触发一次（fadeInDoneNotified 由 armSonicGate/prepareFadeIn/suspendSonic 复位）。
+            // 淡入完成检测：爬到 1 时通知 PlayerManager 恢复硬件音量（单次触发）
             if (fadeTarget == 1f && fadeGain >= 1f && !fadeInDoneNotified) {
                 fadeInDoneNotified = true
                 onFadeInDone?.invoke()
             }
-            // 低频段/高频段各自平滑逼近：低频轰不连坐高音（泵动效应根治）
+            // 低/高频段各自平滑逼近（防泵动效应）
             val coefL = if (lowTargetGain < limSmoothGainLow) attackCoef else releaseCoef
             limSmoothGainLow += (lowTargetGain - limSmoothGainLow) * coefL
             val coefH = if (highTargetGain < limSmoothGainHigh) attackCoef else releaseCoef
             limSmoothGainHigh += (highTargetGain - limSmoothGainHigh) * coefH
-            // 求和输出：低段*低段增益 + 高段*高段增益（LR4 交叉点 -6dB、求和 0dB 平坦）
+            // 求和输出（LR4 交叉点 -6dB、求和平坦）
             val outL = (limiterLow[0][f] * limSmoothGainLow + limiterHigh[0][f] * limSmoothGainHigh) * fadeGain
             outputBuffer.putShort((outL.coerceIn(-1f, 1f) * 32767f).toInt().toShort())
             if (ch == 2) {
@@ -600,7 +519,7 @@ class JiepiAudioProcessor : AudioProcessor {
     }
 
     override fun queueEndOfStream() {
-        // 先把 Sonic 缓冲尾巴冲刷出来过 DSP 链，再宣告结束
+        // 冲刷 Sonic 缓冲尾巴后再宣告结束
         val s = sonic
         if (s != null) {
             s.flush()
@@ -622,20 +541,50 @@ class JiepiAudioProcessor : AudioProcessor {
 
     override fun isEnded(): Boolean = ended && outputBuffer.remaining() == 0
 
-    // 切歌防 pop：UI 线程调用设置目标，播放线程在处理音频时逐样本逼近，天然跟随数据流无竞态
-    // fadeOut(durationMs)：与 fadeIn 对称的时长参数；交叉淡入时新旧歌用同一时长
-    //（时长顶到最大），避免"新歌 500ms 慢入 + 旧歌 25ms 突断"的不对称听感。
-    fun fadeOut(durationMs: Int = 25) { fadeMs = durationMs.coerceIn(10, 500); fadeTarget = 0f }
+    // 淡出：设置目标，播放线程逐样本逼近（切歌防 pop）
+    fun fadeOut(durationMs: Int = 25) {
+        fadeMs = durationMs.coerceIn(10, 500)
+        fadeTarget = 0f
+    }
     fun fadeIn(durationMs: Int = 25) { fadeMs = durationMs.coerceIn(10, 500); fadeTarget = 1f }
-    // 双实例交叉淡入：目标实例预加载期间强制静音（fadeGain=0），防止满音量 PCM 提前
-    // 写进 AudioTrack buffer，等 play() start 瞬间轰出 start 咔哒；READY 后由 fadeIn() 拉起
+
+    // 播放前真实信号预滚（IIR 收敛）
+    fun warmUp(pcm: ShortArray, inSampleRate: Int, inChannels: Int) {
+        if (pcm.isEmpty()) return
+        sampleRate = inSampleRate
+        channelCount = inChannels.coerceIn(1, 2)
+        active = true
+        Log.i("JiepiWarm", "warmUp: pcm=${pcm.size} sr=$inSampleRate ch=$inChannels")
+        // 稳态起步：系数写定 + zi 注入，再真实信号预滚收敛
+        rebuild(clearState = true)
+        fxSmoothCoef = 1f - exp(-1f / (sampleRate * 0.015f))
+        // 预滚收敛：真实信号过链、输出静音（保持 prepareFadeIn 态）
+        fadeGain = 0f
+        fadeTarget = 0f
+        fadeInDoneNotified = false
+        // 直接喂原始真实信号过链（不经过变速引擎）
+        val ch = channelCount.coerceIn(1, 2)
+        val frames = pcm.size / ch
+        // 分块喂，避免超大输出缓冲
+        var off = 0
+        while (off < frames) {
+            val n = minOf(2048, frames - off)
+            processFrames(pcm, n, ch, off)
+            off += n
+        }
+        // 预滚完成标记（configure 同格式保留稳态）
+        warmedFormatReady = true
+        // 限幅器平滑增益复位（播放从头重放，防预滚压缩值错位调制）
+        limSmoothGainLow = 1f
+        limSmoothGainHigh = 1f
+    }
+    // 预加载期强制静音（防 play start 轰出咔哒）
     fun prepareFadeIn() {
         fadeGain = 0f
         fadeTarget = 0f
         fadeInDoneNotified = false
     }
-    // 武装变速窗口门控：seek/切歌后 Sonic reset 重建窗口期间保持静音，
-    // Sonic 恢复输出那一刻（queueInput 检测 avail>0）自动解除并淡入
+    // 武装变速窗口门控（seek/切歌窗口重建期保持静音）
     fun armSonicGate() {
         sonicGateActive = true
         fadeGain = 0f
@@ -643,16 +592,9 @@ class JiepiAudioProcessor : AudioProcessor {
         fadeInDoneNotified = false
     }
 
-    // 拖条踢引擎：拖动播放进度条期间临时把变速/变调引擎踢出处理链——
-    // seek 是 Media3 flush+prefill，RubberBand resetBuffers 重建预缓冲窗口的起振瞬态
-    // 正是变速/变调拖条杂音与"传染"正常拖条的源头。拖动期间让引擎完全不参与
-    //（参数归 1 + 清缓冲 → needSonic=false → 走与"未变速未变调"相同的直通链），
-    // seek 完成后再由 restoreSonic 恢复参数重新武装。
-    // 思路与"按场景动态切换处理策略"一致：不需要变速处理的阶段直接让处理链直通。
+    // 拖动 seek 期间踢出变速/变调引擎（走直通链，防窗口重建瞬态）
     fun suspendSonic() {
-        // 官方标准做法（对照 Media3 SonicAudioProcessor.flush）：归零/摘链时销毁重建引擎实例，
-        // 彻底清掉 RubberBand 内部状态（基音周期跟踪/相位累积/块式窗口残留），而不是仅 resetBuffers。
-        // 与"开过变速归零 == 从没开过"完全等价，从根上断掉归零后切歌/拖条的刺啦爆音传染。
+        // 销毁引擎实例（清掉内部状态，归零后与从没开过等价）
         val s = sonic
         if (s != null) {
             s.close()
@@ -669,13 +611,9 @@ class JiepiAudioProcessor : AudioProcessor {
         fadeTarget = 0f
     }
 
-    // 拖动 seek 完成：恢复变速/变调参数，引擎从原速重新武装（resetBuffers + 从 1 渐变到目标，
-    // 由 advanceFade 每音频块推进，块间过渡引擎内部平滑）。预热期（窗口重建→稳定期→500ms
-    // 淡入）由 armSonicGate 门控接管，硬件音量恢复由 onFadeInDone 事件驱动（PlayerManager
-    // seek 完成回调不抢跑 setVolume(1f)，防把预热中段抖动瞬态轰出）。
+    // 拖动 seek 完成：恢复变速/变调参数，引擎从原速重新武装
     fun restoreSonic(speed: Float, pitch: Float) {
-        // 官方标准做法：换源/恢复时若实例已被销毁（suspendSonic 归零摘链），直接 new 重新武装；
-        // 若实例还在则复用。重建后的引擎内部状态干净，与"从没开过变速"等价。
+        // 实例已销毁则重建，否则复用
         var s = sonic
         if (s == null) {
             s = RubberBandStream(sampleRate, channelCount)
@@ -693,17 +631,11 @@ class JiepiAudioProcessor : AudioProcessor {
     }
 
     override fun flush() {
-        // 官方标准做法（对照 Media3 SonicAudioProcessor.flush()）：参数变化/seek/换源时
-        // 直接销毁重建引擎实例，而不是仅 resetBuffers——RubberBand 的 nativeReset 不清
-        // 基音周期跟踪/相位累积等内部状态，复用旧实例会把残留瞬态传染给新歌/新位置。
-        // 重建时按当前目标参数武装，变速变调值不丢；未开过变速（实例为 null）则保持直通。
+        // 销毁重建引擎实例（nativeReset 不清内部状态，防残留传染）
         val cur = sonic
         if (cur != null) {
             cur.close()
-            // 归零状态（目标已回原速原调）：销毁后不再重建，彻底摘链——
-            // "开过变速归零"与"从没开过"在引擎层面完全等价，切歌/seek 的
-            // RubberBand 残留状态不再传染新音源（归零后手动切歌/拖条的刺啦爆音根因）。
-            // 非归零（用户当前要变速/变调）：重建干净实例按目标参数武装，功能不丢。
+            // 归零状态不再重建（彻底摘链）；非归零按目标参数重建
             if (targetSpeed == 1f && targetPitch == 1f) {
                 sonic = null
             } else {
@@ -713,14 +645,7 @@ class JiepiAudioProcessor : AudioProcessor {
             }
         }
         fadeRemaining = 0
-        // fadeGain 字段刻意不在 flush 里归 1（保留调用方现值，由 fadeOut/fadeIn 控制）：
-        // 手动切歌时 fadeOut 已把 fadeGain 压到 0，若这里拉回 1，新歌 AudioTrack
-        // 重启瞬间会满音量轰出（start 咔哒），fadeIn 也因此失效——残留杂音的根因。
-        // 保留 0 后由 fadeIn() 让新歌 45ms 淡入，正好盖住 AudioTrack start 的咔哒。
-        // 冷启动（初始 1）与自动切歌（无人调 fadeOut，仍为 1）不受影响。
-        for (ch in 0 until 2) for (b in 0 until 10) eqState[ch][b].fill(0f)
-        // 效果参数平滑值归零：切歌/seek 音频流重来，平滑值从 0 重新向目标收敛，
-        // 避免沿用旧平滑值在新歌开头造成短暂效果残留（与 fadeIn 同步渐入，自然无感）
+        // flush 保留 fadeGain 与 EQ 状态；平滑参数归零
         smoothEffectDynamic = 0f
         smoothEffectSurround = 0f
         smoothEffectReverb = 0f
@@ -744,10 +669,20 @@ class JiepiAudioProcessor : AudioProcessor {
             reverbHpState.fill(0f)
             reverbHpXPrev.fill(0f)
         }
+        // 入口低切状态清零
+        if (reverbInHpState.isNotEmpty()) {
+            reverbInHpState.fill(0f)
+            reverbInHpXPrev.fill(0f)
+        }
         limSmoothGainLow = 1f
         limSmoothGainHigh = 1f
-        // 分频限幅：LR4 滤波状态清零（防切歌后旧状态残留瞬态），缓冲不需清（按块重写）
-        for (chIdx in 0 until 2) for (b in 0 until 4) lr4State[chIdx][b].fill(0f)
+        // LR4 状态不清；限幅缓冲清空
+        if (limiterBuf.isNotEmpty()) limiterBuf.fill(0f)
+        if (limiterBufR.isNotEmpty()) limiterBufR.fill(0f)
+        for (c in 0 until 2) {
+            if (limiterLow[c].isNotEmpty()) limiterLow[c].fill(0f)
+            if (limiterHigh[c].isNotEmpty()) limiterHigh[c].fill(0f)
+        }
         outputBuffer.clear()
         ended = false
     }
@@ -756,23 +691,21 @@ class JiepiAudioProcessor : AudioProcessor {
 
     // ========== DSP 算法 ==========
 
-    // LR4 分频器系数：交叉点 250Hz，Q=1/√2 双二阶 Butterworth 级联（低通/高通各 2 级），
-    // RBJ Audio EQ Cookbook 公式，Double 精度计算防低频量化噪声。
-    // 采样率变化时自动重算并清空滤波状态，防旧状态套新系数产生瞬态爆音。
+    // LR4 分频器系数：交叉 250Hz，Q=1/√2 双二阶 Butterworth 级联（RBJ 公式）
     private fun ensureLr4Coeffs() {
         if (lr4InitSampleRate == sampleRate) return
         lr4InitSampleRate = sampleRate
         val w0 = 2.0 * PI * lr4CrossoverHz / sampleRate
         val cosW0 = cos(w0)
         val sinW0 = sin(w0)
-        val alpha = sinW0 / (2.0 * 0.7071067811865476) // Q=1/√2 ≈ 0.7071
+        val alpha = sinW0 / (2.0 * 0.7071067811865476) // Q=1/√2
         val a0 = 1.0 + alpha
-        // 低通（RBJ LPF）：b0=(1-cos)/2, b1=1-cos, b2=b0；a1=-2cos, a2=1-alpha（均除以 a0）
+        // 低通（RBJ LPF）
         val lpB0 = (1.0 - cosW0) / 2.0 / a0
         val lpB1 = (1.0 - cosW0) / a0
         val lpA1 = (-2.0 * cosW0) / a0
         val lpA2 = (1.0 - alpha) / a0
-        // 高通（RBJ HPF）：b0=(1+cos)/2, b1=-(1+cos), b2=b0；a 系数与低通相同
+        // 高通（RBJ HPF，a 系数与低通相同）
         val hpB0 = (1.0 + cosW0) / 2.0 / a0
         val hpB1 = -(1.0 + cosW0) / a0
         lr4LpCoeff = floatArrayOf(lpB0.toFloat(), lpB1.toFloat(), lpB0.toFloat(), lpA1.toFloat(), lpA2.toFloat())
@@ -780,7 +713,7 @@ class JiepiAudioProcessor : AudioProcessor {
         for (chIdx in 0 until 2) for (b in 0 until 4) lr4State[chIdx][b].fill(0f)
     }
 
-    // 单级双二阶（Direct Form II Transposed 等价写法，与 processEq 同构）
+    // 单级双二阶（Direct Form II Transposed）
     private fun processBiquad(x: Float, st: FloatArray, c: FloatArray): Float {
         val out = c[0] * x + c[1] * st[0] + c[2] * st[1] - c[3] * st[2] - c[4] * st[3]
         st[1] = st[0]
@@ -790,27 +723,35 @@ class JiepiAudioProcessor : AudioProcessor {
         return out
     }
 
-    // 单声道过 10 段双二阶（Direct Form II Transposed 等价写法）
+    // 10 段双二阶级联（DF2T + denormal 防护）
     private fun processEq(x: Float, ch: Int): Float {
         var y = x
         for (band in 0 until 10) {
             val st = eqState[ch][band]
             val c = eqCoeffs[band]
-            val out = c[0] * y + c[1] * st[0] + c[2] * st[1] - c[3] * st[2] - c[4] * st[3]
-            st[1] = st[0]
-            st[0] = y
-            st[3] = st[2]
-            st[2] = out
+            val out = c[0] * y + st[0]
+            val ns1 = c[1] * y - c[3] * out + st[1]
+            val ns2 = c[2] * y - c[4] * out
+            if (Math.abs(ns1) < DENORMAL_EPS) st[0] = ns1 + DENORMAL_EPS else st[0] = ns1
+            if (Math.abs(ns2) < DENORMAL_EPS) st[1] = ns2 + DENORMAL_EPS else st[1] = ns2
             y = out
         }
         return y
     }
 
-    // Schroeder 混响：预延迟 45ms → 16 梳状并联（反馈路径带一阶低通阻尼）→ 5 全通串联，返回湿声
+    // Schroeder 混响：预延迟 → 16 梳状并联（带阻尼低通）→ 5 全通串联，返回湿声
     private fun processReverb(xIn: Float, ch: Int): Float {
         var x = xIn
-        // 预延迟：写当前干声、读 45ms 前的信号给混响核心。
-        // 混响晚 45ms 出现：鼓点先以干声到达，混响像从远处传回，大空间距离感。
+        // 入口低切 250Hz（一阶高通，250Hz 以下低频不进混响，与末端高通一致）
+        if (reverbInHpState.isNotEmpty()) {
+            val yPrev = reverbInHpState[ch]
+            val xPrev = reverbInHpXPrev[ch]
+            val y = 0.9825f * (x - xPrev) + 0.9650f * yPrev
+            reverbInHpState[ch] = y
+            reverbInHpXPrev[ch] = x
+            x = y
+        }
+        // 预延迟：干声先到、混响晚 32ms（大空间距离感）
         val pd = preDelayBuf[ch]
         if (pd.isNotEmpty()) {
             val pdi = preDelayIdx[ch]
@@ -825,8 +766,7 @@ class JiepiAudioProcessor : AudioProcessor {
             val len = buf.size
             var idx = combIdx[ch][n]
             val delayed = buf[idx]
-            // 阻尼低通：同时压输出与反馈——第一个反射就被削掉高频，返回声从一开始就模糊。
-            // 反馈路径与输出共用同一低通结果，保证首个输出样本同样经过阻尼。
+            // 阻尼低通（压输出与反馈，返回声从开始就模糊）
             val lp = combLowpass[ch][n] + dampAlpha * (delayed - combLowpass[ch][n])
             combLowpass[ch][n] = lp
             buf[idx] = x + combFeedback[n] * lp
@@ -835,11 +775,9 @@ class JiepiAudioProcessor : AudioProcessor {
             combIdx[ch][n] = idx
             acc += lp
         }
-        // 16 个梳状平均 0.20：湿声内部电平降档（不碰干湿比）
+        // 16 梳状平均 0.20（湿声内部电平降档）
         var wet = acc * 0.20f
-        // 全通链按教科书结构：逐级低通撤除（低通只该在梳状反馈回路做 Moorer 阻尼），
-        // 高频得以进入混响；吱声土壤已由 <10ms 互质延迟表铲净，此处直接过原样 delayed。
-        // 全通链 5 级（Schroeder 原版），处理循环随之扩到 5
+        // 5 级全通链（Schroeder 原版，不加低通）
         for (n in 0 until 5) {
             val buf = allpassBuf[ch][n]
             val len = buf.size
@@ -852,22 +790,19 @@ class JiepiAudioProcessor : AudioProcessor {
             allpassIdx[ch][n] = idx
             wet = out
         }
-        // 湿声总低通：混响链末端削一道高频（alpha=0.3，约 3.8kHz 起滚降）。
-        // 中高频交给阻尼在路上压，门口别闷着，让混响更亮更通透。
+        // 湿声总低通（末端削高频，让混响更亮）
         if (reverbLpState.isNotEmpty()) {
             val s = reverbLpState[ch]
-            // 末端总低通 0.30：湿声高频再少削一道
-            val lp = s + 0.30f * (wet - s)
+            // 末端总低通 0.42（略暗一点，找回朦胧氛围感）
+            val lp = s + 0.42f * (wet - s)
             reverbLpState[ch] = lp
             wet = lp
         }
-        // 湿声高通 fc=200Hz：标准一阶高通公式。
-        // 标准一阶高通：y=(1+b)/2*(x[n]-x[n-1]) + b*y[n-1]，b=(1-tan(π·fc/fs))/(1+tan(π·fc/fs))，
-        // fc=200Hz @48k → b≈0.9742、(1+b)/2≈0.9871。200Hz 以下衰减、以上保留，去泥巴保体量。
+        // 湿声高通 fc=250Hz（一阶高通，压低频泥巴但保留 250-300Hz 温暖）
         if (reverbHpState.isNotEmpty()) {
             val yPrev = reverbHpState[ch]
             val xPrev = reverbHpXPrev[ch]
-            val y = 0.9871f * (wet - xPrev) + 0.9742f * yPrev
+            val y = 0.9825f * (wet - xPrev) + 0.9650f * yPrev
             reverbHpState[ch] = y
             reverbHpXPrev[ch] = wet
             wet = y

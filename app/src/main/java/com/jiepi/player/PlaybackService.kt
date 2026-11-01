@@ -30,15 +30,8 @@ import androidx.media3.session.MediaSession
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 
-// 媒体播放前台服务：自管媒体会话 + 通知栏卡片 + 前台服务。
-// 设计说明：原实现继承 MediaSessionService，依赖其 MediaNotificationManager 自动挂前台/发通知；
-// 但该管理器要求会话 playbackState 为 PLAYING/BUFFERING 才 startForeground，而本项目用
-// SimpleBasePlayer 动态代理（SimpleBasePlayer 状态机恒为 READY，播放态由 playWhenReady 表达），
-// 导致 media3 判定"无需前台"永不 startForeground——日志直接报
-// ForegroundServiceDidNotStartInTimeException（startForegroundService 后 5 秒未挂前台）。
-// 现改为继承 Service 自管：前台服务在 onStartCommand 立即拉起；通知卡用系统 MediaStyle +
-// 会话 token（播放/暂停/上下曲按钮由系统按会话可用命令自动渲染），播放状态变化时刷新内容。
-// 车载/蓝牙媒体按键仍由 manifest 的 MediaButtonReceiver 转发到 onStartCommand，再交给会话。
+// 媒体播放前台服务：自管媒体会话 + 通知栏卡片 + 前台服务
+// 自管前台（SimpleBasePlayer 恒 READY）
 @OptIn(UnstableApi::class)
 class PlaybackService : Service() {
 
@@ -57,14 +50,14 @@ class PlaybackService : Service() {
     private var sessionActivity: PendingIntent? = null
     private var startedForeground = false
 
-    // 出声状态变化（切歌/暂停/恢复/seek）时：刷会话状态给车载，同时更新通知卡内容
+    // 状态变化：刷会话 + 更新通知
     private val playbackListener: () -> Unit = {
         playerProxy?.invalidateNow()
         if (startedForeground) refreshNotification()
     }
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    // 通知栏/车载进度条兜底刷新：ExoPlayer 的 position 事件不会都透传到 SimpleBasePlayer，
+    // 通知栏/车载进度条兜底刷新
     // 每秒拉一次真实位置保证进度不卡（1Hz 开销可忽略，timeline 为懒构建）。
     private val ticker = object : Runnable {
         override fun run() {
@@ -91,9 +84,7 @@ class PlaybackService : Service() {
         mainHandler.post(ticker)
     }
 
-    // 启动入口：播放/恢复（startForegroundService）与媒体按键（MediaButtonReceiver）都走这里。
-    // 媒体按键直接交给会话（MediaSession 内置 KEYCODE 映射，无需自己解析）；
-    // 普通启动立即挂前台通知，满足 startForegroundService 的 5 秒时限。
+    // 启动入口（播放/恢复 + 媒体按键 + 挂前台通知）
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_PLAY_PAUSE -> {
@@ -116,7 +107,7 @@ class PlaybackService : Service() {
         }
         if (intent?.action == Intent.ACTION_MEDIA_BUTTON) {
             // 蓝牙耳机/车载媒体键：解析 KeyEvent 后直接驱动 PlayerManager（会话状态经
-            // playbackListener -> invalidateNow 自动跟随，无需绕 controller）
+            // playbackListener → invalidateNow 自动跟随
             val keyEvent = intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT, KeyEvent::class.java)
             if (keyEvent != null && keyEvent.action == KeyEvent.ACTION_DOWN) {
                 when (keyEvent.keyCode) {
@@ -161,7 +152,7 @@ class PlaybackService : Service() {
         }
     }
 
-    // 前台服务运行中：状态变化时刷新通知（MediaStyle 按钮状态由系统随会话自动更新）
+    // 状态变化刷新通知
     private fun refreshNotification() {
         getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification())
     }
@@ -228,14 +219,14 @@ class PlaybackService : Service() {
         )
 }
 
-// SimpleBasePlayer 动态代理：把 MediaSession 的标准播放命令桥接到 PlayerManager
+// SimpleBasePlayer 动态代理（命令桥接 PlayerManager）
 @OptIn(UnstableApi::class)
 class CarPlayerProxy(context: Context) : SimpleBasePlayer(context.mainLooper) {
 
     private val appContext: Context = context.applicationContext
     private val proxyHandler = Handler(context.mainLooper)
 
-    // 供外部（PlaybackService）触发状态刷新：invalidateState 是 protected，需在子类内暴露
+    // 暴露 invalidateState（protected）供外部刷新
     fun invalidateNow() {
         invalidateState()
     }
@@ -318,18 +309,13 @@ class CarPlayerProxy(context: Context) : SimpleBasePlayer(context.mainLooper) {
         return Futures.immediateVoidFuture()
     }
 
-    // 切歌与拖动：SimpleBasePlayer 内部把 next/previous/seekTo 统一换算成窗口索引+位置。
-    // 车机/方向盘 AVRCP 的 skipToNext/skipToPrevious 会以 COMMAND_SEEK_TO_NEXT(9)/
-    // COMMAND_SEEK_TO_PREVIOUS(7)（及 MEDIA_ITEM 变体 8/6）进入本方法，此时必须改道
-    // PlayerManager.next()/previous()，让随机/循环等播放逻辑生效；若按默认"当前窗口索引±1"
-    // 处理会绕过 PlayerManager 的 shuffle 队列（SimpleBasePlayer 的窗口顺序与随机队列是两套），
-    // 表现为随机模式下车机切歌仍按列表顺序。
+    // 切歌/拖动：AVRCP 指令改道 PlayerManager（保留随机/循环逻辑）
     override fun handleSeek(windowIndex: Int, positionMs: Long, seekCommand: Int): ListenableFuture<*> {
         when (seekCommand) {
             Player.COMMAND_SEEK_TO_NEXT,
             Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM -> {
                 PlayerManager.next(appContext)
-                // 拦截后 SimpleBasePlayer 仍会按传入 windowIndex 做 pending 状态更新，
+                // 拦截后 SimpleBasePlayer 仍按 windowIndex 更新 pending 状态
                 // post 一次 invalidateNow 覆盖为真实索引，避免车机短暂显示错误曲目。
                 proxyHandler.post { invalidateNow() }
                 return Futures.immediateVoidFuture()
@@ -370,7 +356,7 @@ class CarPlayerProxy(context: Context) : SimpleBasePlayer(context.mainLooper) {
     }
 }
 
-// 歌曲队列时间线：让车载/通知栏能识别整个队列，SimpleBasePlayer 据此换算上下曲窗口
+// 队列时间线（上下曲窗口）
 private class SongsTimeline(private val paths: List<String>) : Timeline() {
 
     override fun getWindowCount(): Int = paths.size
@@ -406,7 +392,7 @@ private class SongsTimeline(private val paths: List<String>) : Timeline() {
 
     private fun mediaItemFor(index: Int, path: String): MediaItem {
         // 队列每首都优先用 ID3 歌名/歌手（id3Titles 已是 ID3 优先回退文件名的最终显示名）；
-        // 取不到（队列未同步）才回退文件名，保证车机/通知栏整条队列都是真实歌名
+        // 队列歌名回退文件名
         val title = PlayerManager.id3Titles.getOrNull(index)?.takeIf { it.isNotBlank() }
             ?: path.substringAfterLast('/').substringBeforeLast('.')
         val artist = PlayerManager.id3Artists.getOrNull(index)?.takeIf { it.isNotBlank() }
