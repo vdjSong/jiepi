@@ -2,7 +2,7 @@
 
 > **Author**: Song (GitHub: [vdjSong](https://github.com/vdjSong)) · **Copyright** (c) 2026 · Licensed under [GPL-3.0](LICENSE)
 
-> **国内镜像**：Gitee 同步镜像：https://gitee.com/vdjsong/jiepi（同一作者维护，国内访问更快）
+> **国内镜像**：Gitee 同步镜像：https://gitee.com/vdjsong/jiepi/ （同一作者维护，国内访问更快）
 
 
 一款纯本地、无广告、轻量干净的 Android 音乐播放器。
